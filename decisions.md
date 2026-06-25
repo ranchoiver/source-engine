@@ -67,11 +67,23 @@ On ToGL/OpenGL this was made worse by `togl/linuxwin/dxabstract.cpp` marking sam
   - `FLASHLIGHTDEPTHFILTERMODE=1`
   - `FLASHLIGHTDEPTHFILTERMODE=2`
 - The emitted assembly declares `RandomRotationSampler` on `s6` and `FlashlightDepthSampler` on `s7`, with rotation/noise sampled from `s6` and all depth taps sampled from `s7`.
-- `shadercompile.exe` was not found in this checkout, so shader `.vcs` regeneration has not been done yet.
-- VPC can generate `shadercompile_dll` and `shadercompile_launcher` projects, but MSBuild of `shadercompile_dll` is blocked on old internal/public library layout assumptions:
-  - it expects `lib/public/ftol3.obj`.
-  - it expects `lib/public/tier0.lib`, `tier1.lib`, `tier2.lib`, `vmpi.lib`, and `vstdlib.lib`.
-  - it expects `lib/common/win32/2015/release/lzma.lib`.
+- `shadercompile.exe` was not present in the checkout, so I tried building the legacy shader compiler locally:
+  - `devtools/bin/vpc.exe +vmpi +lzma /2019 /f /q` generated the needed utility projects.
+  - `utils/lzma/lzma.vcxproj`, `utils/vmpi/vmpi.vcxproj`, `utils/shadercompile/shadercompile_dll.vcxproj`, and `utils/shadercompile_launcher/shadercompile_launcher.vcxproj` can be built with VS2022 `v143` after staging local x86 Waf libraries and temporary VMPI compatibility shims.
+  - The generated compiler was staged under `C:\game\bin` with `tier0.dll`, `vstdlib.dll`, `filesystem_stdio.dll`, and a minimal local `.deps/shadergame/gameinfo.txt`.
+- Targeted `nmake` on `makefile.stdshader_dx9_20b` succeeded for the `fxc_prep` include target and produced `fxctmp9_tmp/worldtwotextureblend_ps20b.inc`.
+- Targeted shadercompile with the locally built tools parsed the intended single-shader worklist:
+  - `24,576` commands
+  - `1,536` static combos
+- The normal parallel shadercompile path still failed before writing `.vcs` output:
+  - subprocess workers crash and leave minidumps under `%TEMP%/shadercompiletemp`.
+  - no `.vcs` was emitted.
+- Temporary local validation patches showed more about the failure but were not kept:
+  - forwarding `-nointercept` to subprocesses does not solve the path because subprocess mode only handles the in-process `InterceptFxc` path.
+  - forcing single-thread mode and running generated batches through `cmd.exe /d /c temp.bat` reached the real `fxc.exe` path and compiled many `worldtwotextureblend_ps20b` commands.
+  - that slow path then hit old shadercompile response/file-handle behavior (`failed writing shader.o`) until a temporary `pResponse->Release()` was added.
+  - with those local-only fixes, the fast in-process path ran for more than 12 CPU minutes without producing `.vcs` output, so I stopped it rather than leaving an indefinite compiler process.
+- Conclusion: the shader source compiles through `fxc.exe`, but complete local `.vcs` regeneration still needs a clean/known-good Source shadercompile tool setup or a deliberate separate fix to the legacy shadercompile utility.
 
 ## Build/Dependency State
 
@@ -108,9 +120,10 @@ On ToGL/OpenGL this was made worse by `togl/linuxwin/dxabstract.cpp` marking sam
   - `lib`
   - `thirdparty`
 - After submodule initialization, the repo-provided `lib/win32/amd64` also contains Source-style libraries such as `libz.lib`, `SDL2.lib`, `libjpeg.lib`, and `libpng.lib`.
-- Still missing/unresolved for VCS regeneration:
-  - `shadercompile.exe` / `shadercompile_dll.dll`
-- No `shadercompile.exe` exists under `C:\source-engine`.
+- Local shadercompile build state:
+  - the checkout does not ship `shadercompile.exe`.
+  - local VS2022-built shadercompile binaries were created only as scratch validation artifacts and cleaned from the repo/submodule status afterward.
+  - the local build required temporary VMPI/source compatibility edits and staged legacy library outputs, so it is not a clean recipe to commit as part of the flashlight fix.
 - `SDL_opengl.h` is available after initializing `thirdparty`.
 - Local-only shader-script helpers/artifacts used during validation are intentionally ignored under `.deps/` or cleaned after use.
 
@@ -130,5 +143,5 @@ The waf build compiles the C++ engine/stdshader DLLs, but runtime shader bytecod
 - Focused build for `stdshader_dx9` and `shaderapidx9` passed.
 - Full `togl` link has not passed on Windows, but isolated `dxabstract.cpp` syntax check passed with Waf's SDL+ToGL arguments.
 - `worldtwotextureblend_ps20b.vcs` has not been regenerated.
-- `shadercompile.exe` / `shadercompile_dll.dll` still need either a matching Source SDK/Valve tool layout or a separate working build recipe.
+- VCS regeneration still needs either a matching Source SDK/Valve shadercompile layout or a separate, intentional shadercompile utility fix/build recipe.
 - No live HL2 runtime render test has been performed in this Windows environment.
