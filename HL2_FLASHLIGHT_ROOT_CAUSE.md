@@ -44,6 +44,21 @@ Without refreshed `.vcs` shader blobs, the C++/ToGL fix is present but the old s
 
 ## Isolated Validation
 
-Using the repo's `dx9sdk/utilities/fxc.exe`, representative `ps_2_b` flashlight-shadow combos for `FLASHLIGHT=1`, `FLASHLIGHTSHADOWS=1`, and `FLASHLIGHTDEPTHFILTERMODE=0..2` compile successfully from the modified HLSL. The emitted assembly declares `RandomRotationSampler` on `s6` and `FlashlightDepthSampler` on `s7`; the generated texture instructions sample the rotation/noise input from `s6` and all shadow-depth taps from `s7`.
+The repo includes a repeatable Windows-side verifier:
 
-The official `buildshaders.bat stdshader_dx9_20b` path can generate the makefile/worklist after a local Perl `String::CRC32` shim and Visual Studio environment are supplied, but final `.vcs` generation remains blocked in this checkout because `shadercompile.exe` and `shadercompile_dll.dll` are not available under `game/bin`.
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify-hl2-flashlight-sampler.ps1
+```
+
+That script uses the repo's `dx9sdk/utilities/fxc.exe` and a tiny local D3DX disassembler helper built under `.deps/hl2_flashlight_verify`. It compiles and disassembles all 384 valid shadowed `WorldTwoTextureBlend` `ps_2_b` flashlight combos (`FLASHLIGHT=1`, `FLASHLIGHTSHADOWS=1`, and the static skip rules that apply when flashlight rendering is enabled).
+
+The verifier asserts the compiled bytecode register table and texture instructions:
+
+- `RandomRotationSampler` is `s6`.
+- `FlashlightDepthSampler` is `s7`.
+- the rotation/noise texture read comes from `s6`.
+- the flashlight shadow-depth reads come from `s7`.
+
+The command passed for all 384 combos in this Windows checkout.
+
+The official `buildshaders.bat stdshader_dx9_20b` path can generate the makefile/worklist after a local Perl `String::CRC32` shim and Visual Studio environment are supplied. Full `.vcs` regeneration remains a separate packaging step because this checkout does not ship a ready-to-use `game/bin/shadercompile.exe` layout, and locally built shadercompile binaries still hit legacy utility issues before emitting `.vcs` output.
