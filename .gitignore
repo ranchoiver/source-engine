@@ -37,3 +37,6 @@ waf3*/
 .vscode/
 .depproj/
 source-engine.sln
+.deps/
+.vcpkg_installed/
+.vcpkg_downloads/

@@ -3798,7 +3798,7 @@ static int ShadowDepthSamplerMaskFromName( const char *pName )
 	}
 	else if ( V_stristr( pName, "worldtwotextureblend_ps" ) ) 
 	{
-		return (1<<2);
+		return (1<<7);
 	}
 	else if ( V_stristr( pName, "teeth_flashlight_ps" ) ) 
 	{
