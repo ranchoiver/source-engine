@@ -37,3 +37,13 @@
 - Restart paths now call `AudioQueuePrime` after buffers are enqueued and before `AudioQueueStart`, so route recovery explicitly re-primes CoreAudio instead of relying on stale queue state.
 - Kept `snd_mixahead`, `snd_async_fullyasync`, `snd_async_minsize`, and `snd_noextraupdate` defaults unchanged. Those are workarounds for different symptoms and should not be the permanent fix for Bluetooth output recovery.
 - Broader modernization should be macOS-only in a follow-up PR, likely evaluating AUHAL/Audio Units or AVAudioEngine plus a callback-fed ring buffer, route-property tracking, underrun counters, and drift policy.
+
+## 2026-06-26 macOS modernization PR
+
+- Rebased `codex/modernize-macos-audio-stack` on top of PR #2 (`codex/fix-hl2-bluetooth-audio-stutter`) after the user asked for the modernization PR to build on the focused Bluetooth fix.
+- Chose Audio Unit HAL output (`kAudioUnitSubType_HALOutput`) as the default modern macOS backend because it matches Apple's hardware I/O model and lets CoreAudio pull exactly the frames it needs.
+- Kept the existing AudioQueue backend as a fallback instead of deleting it. PR #2 already hardens that path, and a fallback is useful for older systems or unexpected AUHAL setup failures.
+- Added `snd_macaudiounit` as a default-on macOS cvar and `-snd_audioqueue` as a command-line escape hatch for the legacy AudioQueue path.
+- The Audio Unit render callback only copies from the pre-mixed Source ring, emits silence for underruns, increments counters, and advances the rendered-frame clock. It does not allocate, call mixer code, restart devices, or mutate CoreAudio properties.
+- CoreAudio default-output, sample-rate, buffer-size, and device-alive listeners only mark a route/device generation. The game thread performs recovery from `PaintBegin()`/`PaintEnd()`.
+- Added AudioUnit framework linkage to Waf; VPC already linked the framework, and now also includes the new backend source/header.

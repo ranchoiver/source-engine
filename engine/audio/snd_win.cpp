@@ -11,8 +11,10 @@
 #endif
 #ifdef OSX
 #include "snd_dev_openal.h"
+#include "snd_dev_mac_audiounit.h"
 #include "snd_dev_mac_audioqueue.h"
 
+ConVar snd_macaudiounit( "snd_macaudiounit", "1" );
 ConVar snd_audioqueue( "snd_audioqueue", "1" );
 
 #endif
@@ -96,8 +98,16 @@ IAudioDevice *IAudioDevice::AutoDetectInit( bool waveOnly )
 #elif defined(OSX)
 		if ( !CommandLine()->CheckParm( "-snd_openal" ) )
 		{
-			DevMsg( "Using AudioQueue Interface\n" );
-			pDevice = Audio_CreateMacAudioQueueDevice();
+			if ( !CommandLine()->CheckParm( "-snd_audioqueue" ) && snd_macaudiounit.GetBool() )
+			{
+				DevMsg( "Using macOS AudioUnit Interface\n" );
+				pDevice = Audio_CreateMacAudioUnitDevice();
+			}
+			if ( !pDevice && snd_audioqueue.GetBool() )
+			{
+				DevMsg( "Using AudioQueue Interface\n" );
+				pDevice = Audio_CreateMacAudioQueueDevice();
+			}
 		}
 		if ( !pDevice )
 		{
