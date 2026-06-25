@@ -41,3 +41,9 @@ The shader now declares and uses the same samplers that the C++ render path bind
 The waf build compiles the engine and `stdshader_dx9` C++ DLL, but shader bytecode normally comes from `.vcs` files loaded at runtime. Because this fix changes `worldtwotextureblend_ps2x.fxc`, a packaged game build also needs regenerated `worldtwotextureblend_ps20b.vcs` and related shader outputs from `materialsystem/stdshaders/buildshaders.bat stdshader_dx9_20b` using the repo's shader compile toolchain.
 
 Without refreshed `.vcs` shader blobs, the C++/ToGL fix is present but the old shader bytecode can still contain the wrong sampler usage.
+
+## Isolated Validation
+
+Using the repo's `dx9sdk/utilities/fxc.exe`, representative `ps_2_b` flashlight-shadow combos for `FLASHLIGHT=1`, `FLASHLIGHTSHADOWS=1`, and `FLASHLIGHTDEPTHFILTERMODE=0..2` compile successfully from the modified HLSL. The emitted assembly declares `RandomRotationSampler` on `s6` and `FlashlightDepthSampler` on `s7`; the generated texture instructions sample the rotation/noise input from `s6` and all shadow-depth taps from `s7`.
+
+The official `buildshaders.bat stdshader_dx9_20b` path can generate the makefile/worklist after a local Perl `String::CRC32` shim and Visual Studio environment are supplied, but final `.vcs` generation remains blocked in this checkout because `shadercompile.exe` and `shadercompile_dll.dll` are not available under `game/bin`.

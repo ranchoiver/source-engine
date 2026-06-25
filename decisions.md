@@ -52,6 +52,21 @@ On ToGL/OpenGL this was made worse by `togl/linuxwin/dxabstract.cpp` marking sam
   - without SDL, `ILauncherMgr` is not declared because `USE_SDL` is off.
   - with SDL, `dx9asmtogl2.cpp` fails in the Windows SDK `GL/gl.h` include path before a complete ToGL link.
 - Isolated syntax-only compile for `togl/linuxwin/dxabstract.cpp` passed using the Waf-generated SDL+ToGL compile arguments.
+- `buildshaders.bat stdshader_dx9_20b` was rerun with:
+  - Visual Studio environment for `nmake`.
+  - `PERL5LIB=/c/source-engine/.deps/perl5:/c/source-engine/devtools/bin`.
+  - a local ignored `.deps/perl5/String/CRC32.pm` compatibility shim.
+- With that setup, the shader scripts generated `makefile.stdshader_dx9_20b` and worklist data, but the full batch still cannot produce `.vcs` files because `game/bin/shadercompile.exe` is absent.
+- `fxc_prep.pl -novcs` succeeded for:
+  - `worldtwotextureblend_ps20`
+  - `worldtwotextureblend_ps20b`
+- The generated `worldtwotextureblend_ps20.inc` matches the checked-in include exactly.
+- The generated `worldtwotextureblend_ps20b.inc` differs from the checked-in include only by a blank line, so this fix does not need a committed combo-index include update.
+- The repo's `dx9sdk/utilities/fxc.exe` successfully compiled representative shadowed-flashlight `ps_2_b` combos from the modified shader for:
+  - `FLASHLIGHTDEPTHFILTERMODE=0`
+  - `FLASHLIGHTDEPTHFILTERMODE=1`
+  - `FLASHLIGHTDEPTHFILTERMODE=2`
+- The emitted assembly declares `RandomRotationSampler` on `s6` and `FlashlightDepthSampler` on `s7`, with rotation/noise sampled from `s6` and all depth taps sampled from `s7`.
 - `shadercompile.exe` was not found in this checkout, so shader `.vcs` regeneration has not been done yet.
 - VPC can generate `shadercompile_dll` and `shadercompile_launcher` projects, but MSBuild of `shadercompile_dll` is blocked on old internal/public library layout assumptions:
   - it expects `lib/public/ftol3.obj`.
@@ -97,6 +112,7 @@ On ToGL/OpenGL this was made worse by `togl/linuxwin/dxabstract.cpp` marking sam
   - `shadercompile.exe` / `shadercompile_dll.dll`
 - No `shadercompile.exe` exists under `C:\source-engine`.
 - `SDL_opengl.h` is available after initializing `thirdparty`.
+- Local-only shader-script helpers/artifacts used during validation are intentionally ignored under `.deps/` or cleaned after use.
 
 ## Important Build Note
 
