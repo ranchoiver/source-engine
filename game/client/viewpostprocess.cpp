@@ -1128,6 +1128,208 @@ void ResetToneMapping(float value)
 
 static ConVar mat_force_tonemap_scale( "mat_force_tonemap_scale", "0.0", FCVAR_CHEAT );
 
+static ConVar mat_cryostasis_intensity( "mat_cryostasis_intensity", "1.0", FCVAR_ARCHIVE, "Intensity for the HL2 Cryostasis-inspired post-processing preset.", true, 0.0f, true, 2.0f );
+static ConVar mat_cryostasis_bloom_scale( "mat_cryostasis_bloom_scale", "2.25", FCVAR_ARCHIVE, "Bloom scale used by the HL2 Cryostasis-inspired post-processing preset.", true, 0.0f, true, 6.0f );
+static ConVar mat_cryostasis_bloom_scalar( "mat_cryostasis_bloom_scalar", "1.65", FCVAR_ARCHIVE, "Final bloom multiplier used by the HL2 Cryostasis-inspired post-processing preset.", true, 0.0f, true, 4.0f );
+static ConVar mat_cryostasis_tonemap_scale( "mat_cryostasis_tonemap_scale", "1.25", FCVAR_ARCHIVE, "Forced tonemap scale used by the HL2 Cryostasis-inspired post-processing preset.", true, 0.0f, true, 4.0f );
+
+struct CryostasisPostProcessSnapshot_t
+{
+	bool m_bValid;
+	int m_nMatHDRLevel;
+	int m_nMatDynamicTonemapping;
+	int m_nMatHDRUncapExposure;
+	int m_nMatForceBloom;
+	int m_nMatDisableBloom;
+	int m_nMatPostprocessingCombine;
+	int m_nMatTonemapAlgorithm;
+	float m_flMatBloomScale;
+	float m_flMatBloomAmountRate;
+	float m_flMatAutoExposureMin;
+	float m_flMatAutoExposureMax;
+	float m_flMatHDRManualTonemapRate;
+	float m_flMatNonHDRBloomScaleFactor;
+	float m_flMatBloomScaleFactorScalar;
+	float m_flMatForceTonemapScale;
+	float m_flMatTonemapPercentTarget;
+	float m_flMatTonemapPercentBrightPixels;
+	float m_flMatTonemapMinAverageLuminance;
+};
+
+static CryostasisPostProcessSnapshot_t s_CryostasisPostProcessSnapshot = { false };
+static bool s_bCryostasisPostProcessActive = false;
+
+static float CryostasisClamp( float flValue, float flMin, float flMax )
+{
+	if ( flValue < flMin )
+		return flMin;
+	if ( flValue > flMax )
+		return flMax;
+	return flValue;
+}
+
+static float CryostasisLerp( float flFrom, float flTo, float flIntensity )
+{
+	return flFrom + ( flTo - flFrom ) * flIntensity;
+}
+
+static void CaptureCryostasisPostProcessSnapshot()
+{
+	if ( s_CryostasisPostProcessSnapshot.m_bValid )
+		return;
+
+	s_CryostasisPostProcessSnapshot.m_bValid = true;
+	s_CryostasisPostProcessSnapshot.m_nMatHDRLevel = mat_hdr_level.GetInt();
+	s_CryostasisPostProcessSnapshot.m_nMatDynamicTonemapping = mat_dynamic_tonemapping.GetInt();
+	s_CryostasisPostProcessSnapshot.m_nMatHDRUncapExposure = mat_hdr_uncapexposure.GetInt();
+	s_CryostasisPostProcessSnapshot.m_nMatForceBloom = mat_force_bloom.GetInt();
+	s_CryostasisPostProcessSnapshot.m_nMatDisableBloom = mat_disable_bloom.GetInt();
+	s_CryostasisPostProcessSnapshot.m_nMatPostprocessingCombine = mat_postprocessing_combine.GetInt();
+	s_CryostasisPostProcessSnapshot.m_nMatTonemapAlgorithm = mat_tonemap_algorithm.GetInt();
+	s_CryostasisPostProcessSnapshot.m_flMatBloomScale = mat_bloomscale.GetFloat();
+	s_CryostasisPostProcessSnapshot.m_flMatBloomAmountRate = mat_bloomamount_rate.GetFloat();
+	s_CryostasisPostProcessSnapshot.m_flMatAutoExposureMin = mat_autoexposure_min.GetFloat();
+	s_CryostasisPostProcessSnapshot.m_flMatAutoExposureMax = mat_autoexposure_max.GetFloat();
+	s_CryostasisPostProcessSnapshot.m_flMatHDRManualTonemapRate = mat_hdr_manual_tonemap_rate.GetFloat();
+	s_CryostasisPostProcessSnapshot.m_flMatNonHDRBloomScaleFactor = mat_non_hdr_bloom_scalefactor.GetFloat();
+	s_CryostasisPostProcessSnapshot.m_flMatBloomScaleFactorScalar = mat_bloom_scalefactor_scalar.GetFloat();
+	s_CryostasisPostProcessSnapshot.m_flMatForceTonemapScale = mat_force_tonemap_scale.GetFloat();
+	s_CryostasisPostProcessSnapshot.m_flMatTonemapPercentTarget = mat_tonemap_percent_target.GetFloat();
+	s_CryostasisPostProcessSnapshot.m_flMatTonemapPercentBrightPixels = mat_tonemap_percent_bright_pixels.GetFloat();
+	s_CryostasisPostProcessSnapshot.m_flMatTonemapMinAverageLuminance = mat_tonemap_min_avglum.GetFloat();
+}
+
+static void RestoreCryostasisPostProcessSnapshot()
+{
+	if ( !s_CryostasisPostProcessSnapshot.m_bValid )
+	{
+		s_bCryostasisPostProcessActive = false;
+		ConMsg( "hl2_cryostasis: no saved post-processing state to restore.\n" );
+		return;
+	}
+
+	mat_hdr_level.SetValue( s_CryostasisPostProcessSnapshot.m_nMatHDRLevel );
+	mat_dynamic_tonemapping.SetValue( s_CryostasisPostProcessSnapshot.m_nMatDynamicTonemapping );
+	mat_hdr_uncapexposure.SetValue( s_CryostasisPostProcessSnapshot.m_nMatHDRUncapExposure );
+	mat_force_bloom.SetValue( s_CryostasisPostProcessSnapshot.m_nMatForceBloom );
+	mat_disable_bloom.SetValue( s_CryostasisPostProcessSnapshot.m_nMatDisableBloom );
+	mat_postprocessing_combine.SetValue( s_CryostasisPostProcessSnapshot.m_nMatPostprocessingCombine );
+	mat_tonemap_algorithm.SetValue( s_CryostasisPostProcessSnapshot.m_nMatTonemapAlgorithm );
+	mat_bloomscale.SetValue( s_CryostasisPostProcessSnapshot.m_flMatBloomScale );
+	mat_bloomamount_rate.SetValue( s_CryostasisPostProcessSnapshot.m_flMatBloomAmountRate );
+	mat_autoexposure_min.SetValue( s_CryostasisPostProcessSnapshot.m_flMatAutoExposureMin );
+	mat_autoexposure_max.SetValue( s_CryostasisPostProcessSnapshot.m_flMatAutoExposureMax );
+	mat_hdr_manual_tonemap_rate.SetValue( s_CryostasisPostProcessSnapshot.m_flMatHDRManualTonemapRate );
+	mat_non_hdr_bloom_scalefactor.SetValue( s_CryostasisPostProcessSnapshot.m_flMatNonHDRBloomScaleFactor );
+	mat_bloom_scalefactor_scalar.SetValue( s_CryostasisPostProcessSnapshot.m_flMatBloomScaleFactorScalar );
+	mat_force_tonemap_scale.SetValue( s_CryostasisPostProcessSnapshot.m_flMatForceTonemapScale );
+	mat_tonemap_percent_target.SetValue( s_CryostasisPostProcessSnapshot.m_flMatTonemapPercentTarget );
+	mat_tonemap_percent_bright_pixels.SetValue( s_CryostasisPostProcessSnapshot.m_flMatTonemapPercentBrightPixels );
+	mat_tonemap_min_avglum.SetValue( s_CryostasisPostProcessSnapshot.m_flMatTonemapMinAverageLuminance );
+
+	s_CryostasisPostProcessSnapshot.m_bValid = false;
+	s_bCryostasisPostProcessActive = false;
+	ConMsg( "hl2_cryostasis: restored previous post-processing state.\n" );
+}
+
+static void ApplyCryostasisPostProcessPreset( float flIntensity )
+{
+	CaptureCryostasisPostProcessSnapshot();
+
+	flIntensity = CryostasisClamp( flIntensity, 0.0f, 2.0f );
+	mat_cryostasis_intensity.SetValue( flIntensity );
+
+	const CryostasisPostProcessSnapshot_t &snapshot = s_CryostasisPostProcessSnapshot;
+
+	mat_hdr_level.SetValue( 2 );
+	mat_dynamic_tonemapping.SetValue( 0 );
+	mat_hdr_uncapexposure.SetValue( 1 );
+	mat_force_bloom.SetValue( 1 );
+	mat_disable_bloom.SetValue( 0 );
+	mat_postprocessing_combine.SetValue( 1 );
+	mat_tonemap_algorithm.SetValue( 1 );
+
+	mat_bloomscale.SetValue( CryostasisLerp( snapshot.m_flMatBloomScale, mat_cryostasis_bloom_scale.GetFloat(), flIntensity ) );
+	mat_bloomamount_rate.SetValue( CryostasisLerp( snapshot.m_flMatBloomAmountRate, 0.22f, flIntensity ) );
+	mat_autoexposure_min.SetValue( CryostasisLerp( snapshot.m_flMatAutoExposureMin, 0.25f, flIntensity ) );
+	mat_autoexposure_max.SetValue( CryostasisLerp( snapshot.m_flMatAutoExposureMax, 3.50f, flIntensity ) );
+	mat_hdr_manual_tonemap_rate.SetValue( CryostasisLerp( snapshot.m_flMatHDRManualTonemapRate, 1.0f, flIntensity ) );
+	mat_non_hdr_bloom_scalefactor.SetValue( CryostasisLerp( snapshot.m_flMatNonHDRBloomScaleFactor, 0.85f, flIntensity ) );
+	mat_bloom_scalefactor_scalar.SetValue( CryostasisLerp( snapshot.m_flMatBloomScaleFactorScalar, mat_cryostasis_bloom_scalar.GetFloat(), flIntensity ) );
+	mat_force_tonemap_scale.SetValue( CryostasisLerp( snapshot.m_flMatForceTonemapScale, mat_cryostasis_tonemap_scale.GetFloat(), flIntensity ) );
+	mat_tonemap_percent_target.SetValue( CryostasisLerp( snapshot.m_flMatTonemapPercentTarget, 70.0f, flIntensity ) );
+	mat_tonemap_percent_bright_pixels.SetValue( CryostasisLerp( snapshot.m_flMatTonemapPercentBrightPixels, 1.25f, flIntensity ) );
+	mat_tonemap_min_avglum.SetValue( CryostasisLerp( snapshot.m_flMatTonemapMinAverageLuminance, 2.0f, flIntensity ) );
+
+	s_bCryostasisPostProcessActive = true;
+	ConMsg( "hl2_cryostasis: applied Cryostasis-inspired post-processing at %.2f intensity.\n", flIntensity );
+}
+
+static void PrintCryostasisPostProcessStatus()
+{
+	ConMsg( "hl2_cryostasis: %s, intensity %.2f\n",
+		s_bCryostasisPostProcessActive ? "active" : "inactive",
+		mat_cryostasis_intensity.GetFloat() );
+	ConMsg( "  tunables: mat_cryostasis_bloom_scale %.2f, mat_cryostasis_bloom_scalar %.2f, mat_cryostasis_tonemap_scale %.2f\n",
+		mat_cryostasis_bloom_scale.GetFloat(),
+		mat_cryostasis_bloom_scalar.GetFloat(),
+		mat_cryostasis_tonemap_scale.GetFloat() );
+	ConMsg( "  use: hl2_cryostasis <0..2|on|off|toggle|reset|status>\n" );
+}
+
+CON_COMMAND( hl2_cryostasis, "Apply an HL2 Cryostasis-inspired bloom/HDR post-processing preset. Usage: hl2_cryostasis <0..2|on|off|toggle|reset|status>" )
+{
+	if ( args.ArgC() < 2 || !Q_stricmp( args[1], "status" ) )
+	{
+		PrintCryostasisPostProcessStatus();
+		return;
+	}
+
+	if ( !Q_stricmp( args[1], "off" ) || !Q_stricmp( args[1], "0" ) )
+	{
+		RestoreCryostasisPostProcessSnapshot();
+		return;
+	}
+
+	if ( !Q_stricmp( args[1], "toggle" ) )
+	{
+		if ( s_bCryostasisPostProcessActive )
+			RestoreCryostasisPostProcessSnapshot();
+		else
+			ApplyCryostasisPostProcessPreset( mat_cryostasis_intensity.GetFloat() );
+		return;
+	}
+
+	if ( !Q_stricmp( args[1], "reset" ) )
+	{
+		mat_cryostasis_intensity.Revert();
+		mat_cryostasis_bloom_scale.Revert();
+		mat_cryostasis_bloom_scalar.Revert();
+		mat_cryostasis_tonemap_scale.Revert();
+		ApplyCryostasisPostProcessPreset( mat_cryostasis_intensity.GetFloat() );
+		return;
+	}
+
+	float flIntensity = mat_cryostasis_intensity.GetFloat();
+	if ( !Q_stricmp( args[1], "on" ) )
+	{
+		if ( args.ArgC() >= 3 )
+			flIntensity = (float)atof( args[2] );
+	}
+	else
+	{
+		flIntensity = (float)atof( args[1] );
+	}
+
+	if ( flIntensity <= 0.0f )
+	{
+		RestoreCryostasisPostProcessSnapshot();
+		return;
+	}
+
+	ApplyCryostasisPostProcessPreset( flIntensity );
+}
+
 static void SetToneMapScale(IMatRenderContext *pRenderContext, float newvalue, float minvalue, float maxvalue)
 {
 	Assert( IsFinite( newvalue ) );
