@@ -47,3 +47,4 @@
 - The Audio Unit render callback only copies from the pre-mixed Source ring, emits silence for underruns, increments counters, and advances the rendered-frame clock. It does not allocate, call mixer code, restart devices, or mutate CoreAudio properties.
 - CoreAudio default-output, sample-rate, buffer-size, and device-alive listeners only mark a route/device generation. The game thread performs recovery from `PaintBegin()`/`PaintEnd()`.
 - Added AudioUnit framework linkage to Waf; VPC already linked the framework, and now also includes the new backend source/header.
+- Added a guarded `kAudioHardwarePropertyPowerHint` / `kAudioHardwarePowerHintNone` request for the AudioUnit backend. This is nonfatal and SDK-compatible, but prevents macOS from selecting the power-saving audio policy that Apple documents can expand the default I/O buffer from 512 to 4096 frames.

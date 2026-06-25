@@ -40,6 +40,9 @@ Assert-TextMatch $audioUnit 'kAudioDevicePropertyNominalSampleRate' 'Backend mus
 Assert-TextMatch $audioUnit 'kAudioDevicePropertyBufferFrameSize' 'Backend must watch hardware buffer-size changes.'
 Assert-TextMatch $audioUnit 'kAudioDevicePropertyDeviceIsAlive' 'Backend must watch device liveness changes.'
 Assert-TextMatch $audioUnit 'AudioObjectAddPropertyListener' 'Backend must install CoreAudio property listeners.'
+Assert-TextMatch $audioUnit 'kAudioHardwarePropertyPowerHint' 'Backend should opt out of CoreAudio power-saving latency inflation when supported.'
+Assert-TextMatch $audioUnit 'kAudioHardwarePowerHintNone' 'Backend should prefer low-latency CoreAudio power policy.'
+Assert-TextMatch $audioUnit 'AudioObjectSetPropertyData\(\s*kAudioObjectSystemObject' 'Power hint must be applied through CoreAudio system object properties.'
 Assert-TextMatch $audioUnit 'RecoverAudioUnit\(\s*"CoreAudio device change"' 'Device changes must recover on the game thread.'
 Assert-TextMatch $audioUnit 'm_underrunCount\+\+' 'Underruns must be counted.'
 Assert-TextMatch $audioUnit 'SilenceOutput' 'Underruns and unsupported callback layouts must emit silence.'
@@ -68,6 +71,23 @@ if ($renderBody -notmatch 'm_renderedFrames\s*\+=\s*requestedFrames') {
 
 if ($renderBody -notmatch 'CopyFromMixRing') {
     throw 'Render callback must copy from the pre-mixed Source ring.'
+}
+
+$openMatch = [regex]::Match(
+    $audioUnit,
+    'bool\s+CAudioDeviceMacAudioUnit::OpenAudioUnit\s*\(\s*void\s*\)\s*\{(?<body>.*?)^\}',
+    [System.Text.RegularExpressions.RegexOptions]::Singleline -bor [System.Text.RegularExpressions.RegexOptions]::Multiline
+)
+
+if (!$openMatch.Success) {
+    throw 'Could not find CAudioDeviceMacAudioUnit::OpenAudioUnit.'
+}
+
+$openBody = $openMatch.Groups['body'].Value
+$powerPolicyPos = $openBody.IndexOf('PreferLowLatencyCoreAudioPowerPolicy();')
+$defaultDevicePos = $openBody.IndexOf('GetDefaultOutputDevice')
+if ($powerPolicyPos -lt 0 -or $defaultDevicePos -lt 0 -or $powerPolicyPos -gt $defaultDevicePos) {
+    throw 'Power policy should be applied before opening the active device.'
 }
 
 $audioUnitPos = $sndWin.IndexOf('Audio_CreateMacAudioUnitDevice')

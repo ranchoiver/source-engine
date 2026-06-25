@@ -10,6 +10,7 @@ The new backend is designed around the macOS/Core Audio model instead of the old
 - the callback never starts, stops, rebuilds, allocates, or calls engine mixing;
 - underruns emit silence and increment a counter rather than reusing stale audio;
 - default-output, sample-rate, buffer-size, and device-alive property listeners mark route changes;
+- when supported by the SDK/runtime, CoreAudio is told not to favor power-saving audio behavior that can inflate I/O buffer size;
 - the game thread performs device recovery and restart work outside the real-time callback;
 - `GetOutputPosition()` is clocked by frames rendered by the Audio Unit callback.
 
@@ -33,6 +34,8 @@ The older AudioQueue path remains useful as a fallback and already gained route/
 
 The backend keeps Source's existing `snd_mixahead` policy, but removes the extra AudioQueue submission depth from the default path. Startup waits until at least the current hardware buffer depth, clamped to a practical range, is already mixed before starting the Audio Unit. During playback, the Audio Unit callback advances the hardware clock by rendered frames and fills missing frames with silence if the engine falls behind.
 
+It also opts out of CoreAudio's power-saving audio policy when `kAudioHardwarePropertyPowerHint` is available by setting `kAudioHardwarePowerHintNone`. Apple TN2321 documents that favoring power saving can increase the default I/O buffer size from 512 to 4096 frames. Avoiding that policy can prevent about 81 ms of extra buffer latency at 44.1 kHz, while remaining nonfatal on older SDKs or systems that do not expose the property.
+
 That gives a cleaner failure mode: a counted underrun instead of stale buffer replay, unbounded queue drift, or audio-thread device recovery.
 
 ## Validation
@@ -41,6 +44,7 @@ That gives a cleaner failure mode: a counted underrun instead of stale buffer re
   - verifies Audio Unit is tried before AudioQueue on macOS;
   - verifies Audio Unit framework linkage in Waf and VPC;
   - verifies the render callback pulls from the Source mix ring, emits silence on underrun, and does not perform device lifecycle work;
+  - verifies the low-latency CoreAudio power policy is requested when supported;
   - verifies route/device property listeners drive game-thread recovery.
 - `scripts/verify-audioqueue-recovery.ps1`
 - `git diff --check`

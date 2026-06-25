@@ -116,6 +116,19 @@ static AudioObjectPropertyAddress MakeAudioObjectAddress( AudioObjectPropertySel
 	return address;
 }
 
+static void PreferLowLatencyCoreAudioPowerPolicy()
+{
+#if defined( kAudioHardwarePropertyPowerHint ) && defined( kAudioHardwarePowerHintNone )
+	AudioObjectPropertyAddress address = MakeAudioObjectAddress( kAudioHardwarePropertyPowerHint, kAudioObjectPropertyScopeGlobal );
+	UInt32 powerHint = kAudioHardwarePowerHintNone;
+	OSStatus status = AudioObjectSetPropertyData( kAudioObjectSystemObject, &address, 0, NULL, sizeof( powerHint ), &powerHint );
+	if ( status != noErr )
+	{
+		DevMsg( "Failed to set macOS low-latency audio power policy %d\n", (int)status );
+	}
+#endif
+}
+
 static OSStatus MacAudioUnitRenderCallback( void *inRefCon, AudioUnitRenderActionFlags *ioActionFlags, const AudioTimeStamp *inTimeStamp,
 	UInt32 inBusNumber, UInt32 inNumberFrames, AudioBufferList *ioData )
 {
@@ -256,6 +269,8 @@ bool CAudioDeviceMacAudioUnit::OpenAudioUnit( void )
 
 	m_bFailed = 0;
 	m_bRunning = 0;
+
+	PreferLowLatencyCoreAudioPowerPolicy();
 
 	if ( !GetDefaultOutputDevice( &m_OutputDeviceID ) )
 	{
