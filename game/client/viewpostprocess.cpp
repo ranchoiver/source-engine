@@ -1128,10 +1128,10 @@ void ResetToneMapping(float value)
 
 static ConVar mat_force_tonemap_scale( "mat_force_tonemap_scale", "0.0", FCVAR_CHEAT );
 
-static ConVar mat_cryostasis_intensity( "mat_cryostasis_intensity", "1.0", FCVAR_ARCHIVE, "Intensity for the HL2 Cryostasis-inspired post-processing preset.", true, 0.0f, true, 2.0f );
-static ConVar mat_cryostasis_bloom_scale( "mat_cryostasis_bloom_scale", "2.25", FCVAR_ARCHIVE, "Bloom scale used by the HL2 Cryostasis-inspired post-processing preset.", true, 0.0f, true, 6.0f );
-static ConVar mat_cryostasis_bloom_scalar( "mat_cryostasis_bloom_scalar", "1.65", FCVAR_ARCHIVE, "Final bloom multiplier used by the HL2 Cryostasis-inspired post-processing preset.", true, 0.0f, true, 4.0f );
-static ConVar mat_cryostasis_tonemap_scale( "mat_cryostasis_tonemap_scale", "1.25", FCVAR_ARCHIVE, "Forced tonemap scale used by the HL2 Cryostasis-inspired post-processing preset.", true, 0.0f, true, 4.0f );
+static ConVar mat_cryostasis_intensity( "mat_cryostasis_intensity", "1.0", FCVAR_ARCHIVE, "Intensity for the HL2 Cryostasis ReShade post-processing preset.", true, 0.0f, true, 2.0f );
+static ConVar mat_cryostasis_bloom_scale( "mat_cryostasis_bloom_scale", "2.25", FCVAR_ARCHIVE, "Bloom scale used while the HL2 Cryostasis ReShade preset is active.", true, 0.0f, true, 6.0f );
+static ConVar mat_cryostasis_bloom_scalar( "mat_cryostasis_bloom_scalar", "1.65", FCVAR_ARCHIVE, "Final bloom multiplier used while the HL2 Cryostasis ReShade preset is active.", true, 0.0f, true, 4.0f );
+static ConVar mat_cryostasis_tonemap_scale( "mat_cryostasis_tonemap_scale", "1.25", FCVAR_ARCHIVE, "Forced tonemap scale used while the HL2 Cryostasis ReShade preset is active.", true, 0.0f, true, 4.0f );
 
 struct CryostasisPostProcessSnapshot_t
 {
@@ -1262,7 +1262,7 @@ static void ApplyCryostasisPostProcessPreset( float flIntensity )
 	mat_tonemap_min_avglum.SetValue( CryostasisLerp( snapshot.m_flMatTonemapMinAverageLuminance, 2.0f, flIntensity ) );
 
 	s_bCryostasisPostProcessActive = true;
-	ConMsg( "hl2_cryostasis: applied Cryostasis-inspired post-processing at %.2f intensity.\n", flIntensity );
+	ConMsg( "hl2_cryostasis: applied Cryostasis ReShade post-processing at %.2f intensity.\n", flIntensity );
 }
 
 static void PrintCryostasisPostProcessStatus()
@@ -1274,10 +1274,11 @@ static void PrintCryostasisPostProcessStatus()
 		mat_cryostasis_bloom_scale.GetFloat(),
 		mat_cryostasis_bloom_scalar.GetFloat(),
 		mat_cryostasis_tonemap_scale.GetFloat() );
+	ConMsg( "  shader: AmbientLight, Curves, PandaFX, MagicHDR, Emphasize\n" );
 	ConMsg( "  use: hl2_cryostasis <0..2|on|off|toggle|reset|status>\n" );
 }
 
-CON_COMMAND( hl2_cryostasis, "Apply an HL2 Cryostasis-inspired bloom/HDR post-processing preset. Usage: hl2_cryostasis <0..2|on|off|toggle|reset|status>" )
+CON_COMMAND( hl2_cryostasis, "Apply the HL2 Cryostasis ReShade post-processing preset. Usage: hl2_cryostasis <0..2|on|off|toggle|reset|status>" )
 {
 	if ( args.ArgC() < 2 || !Q_stricmp( args[1], "status" ) )
 	{
@@ -1415,11 +1416,18 @@ private:
 	IMaterialVar *m_pMaterialParam_ColCorrectNumLookups;
 	IMaterialVar *m_pMaterialParam_ColCorrectDefaultWeight;
 	IMaterialVar *m_pMaterialParam_ColCorrectLookupWeights;
+	IMaterialVar *m_pMaterialParam_CryostasisEnable;
+	IMaterialVar *m_pMaterialParam_CryostasisInternal1;
+	IMaterialVar *m_pMaterialParam_CryostasisInternal2;
+	IMaterialVar *m_pMaterialParam_CryostasisInternal3;
+	IMaterialVar *m_pMaterialParam_CryostasisInternal4;
+	IMaterialVar *m_pMaterialParam_CryostasisInternal5;
 
 public:
 	static IMaterial * SetupEnginePostMaterial( const Vector4D & fullViewportBloomUVs, const Vector4D & fullViewportFBUVs, const Vector2D & destTexSize,
-												bool bPerformSoftwareAA, bool bPerformBloom, bool bPerformColCorrect, float flAAStrength );
+												bool bPerformSoftwareAA, bool bPerformBloom, bool bPerformColCorrect, float flAAStrength, bool bPerformCryostasis );
 	static void SetupEnginePostMaterialAA( bool bPerformSoftwareAA, float flAAStrength );
+	static void SetupEnginePostMaterialCryostasis( bool bPerformCryostasis );
 	static void SetupEnginePostMaterialTextureTransform( const Vector4D & fullViewportBloomUVs, const Vector4D & fullViewportFBUVs, Vector2D destTexSize );
 
 private:
@@ -1427,12 +1435,24 @@ private:
 	static float s_vBloomAAValues2[4];
 	static float s_vBloomUVTransform[4];
 	static int   s_PostBloomEnable;
+	static int   s_PostCryostasisEnable;
+	static float s_vCryostasisInternal1[4];
+	static float s_vCryostasisInternal2[4];
+	static float s_vCryostasisInternal3[4];
+	static float s_vCryostasisInternal4[4];
+	static float s_vCryostasisInternal5[4];
 };
 
 float CEnginePostMaterialProxy::s_vBloomAAValues[4]					= { 0.0f, 0.0f, 0.0f, 0.0f };
 float CEnginePostMaterialProxy::s_vBloomAAValues2[4]				= { 0.0f, 0.0f, 0.0f, 0.0f };
 float CEnginePostMaterialProxy::s_vBloomUVTransform[4]				= { 0.0f, 0.0f, 0.0f, 0.0f };
 int   CEnginePostMaterialProxy::s_PostBloomEnable					= 1;
+int   CEnginePostMaterialProxy::s_PostCryostasisEnable				= 0;
+float CEnginePostMaterialProxy::s_vCryostasisInternal1[4]			= { 0.0f, 0.0f, 0.0f, 0.0f };
+float CEnginePostMaterialProxy::s_vCryostasisInternal2[4]			= { 0.0f, 0.0f, 0.0f, 0.0f };
+float CEnginePostMaterialProxy::s_vCryostasisInternal3[4]			= { 0.0f, 0.0f, 0.0f, 0.0f };
+float CEnginePostMaterialProxy::s_vCryostasisInternal4[4]			= { 0.0f, 0.0f, 0.0f, 0.0f };
+float CEnginePostMaterialProxy::s_vCryostasisInternal5[4]			= { 0.0f, 0.0f, 0.0f, 0.0f };
 
 CEnginePostMaterialProxy::CEnginePostMaterialProxy()
 {
@@ -1444,6 +1464,12 @@ CEnginePostMaterialProxy::CEnginePostMaterialProxy()
 	m_pMaterialParam_ColCorrectNumLookups		= NULL;
 	m_pMaterialParam_ColCorrectDefaultWeight	= NULL;
 	m_pMaterialParam_ColCorrectLookupWeights	= NULL;
+	m_pMaterialParam_CryostasisEnable			= NULL;
+	m_pMaterialParam_CryostasisInternal1		= NULL;
+	m_pMaterialParam_CryostasisInternal2		= NULL;
+	m_pMaterialParam_CryostasisInternal3		= NULL;
+	m_pMaterialParam_CryostasisInternal4		= NULL;
+	m_pMaterialParam_CryostasisInternal5		= NULL;
 }
 
 CEnginePostMaterialProxy::~CEnginePostMaterialProxy()
@@ -1463,6 +1489,12 @@ bool CEnginePostMaterialProxy::Init( IMaterial *pMaterial, KeyValues *pKeyValues
 	m_pMaterialParam_ColCorrectNumLookups = pMaterial->FindVar( "$colCorrect_NumLookups", &bFoundVar, false );
 	m_pMaterialParam_ColCorrectDefaultWeight = pMaterial->FindVar( "$colCorrect_DefaultWeight", &bFoundVar, false );
 	m_pMaterialParam_ColCorrectLookupWeights = pMaterial->FindVar( "$colCorrect_LookupWeights", &bFoundVar, false );
+	m_pMaterialParam_CryostasisEnable = pMaterial->FindVar( "$cryostasisEnable", &bFoundVar, false );
+	m_pMaterialParam_CryostasisInternal1 = pMaterial->FindVar( "$cryostasisInternal1", &bFoundVar, false );
+	m_pMaterialParam_CryostasisInternal2 = pMaterial->FindVar( "$cryostasisInternal2", &bFoundVar, false );
+	m_pMaterialParam_CryostasisInternal3 = pMaterial->FindVar( "$cryostasisInternal3", &bFoundVar, false );
+	m_pMaterialParam_CryostasisInternal4 = pMaterial->FindVar( "$cryostasisInternal4", &bFoundVar, false );
+	m_pMaterialParam_CryostasisInternal5 = pMaterial->FindVar( "$cryostasisInternal5", &bFoundVar, false );
 
 	return true;
 }
@@ -1480,6 +1512,24 @@ void CEnginePostMaterialProxy::OnBind( C_BaseEntity *pEnt )
 
 	if ( m_pMaterialParam_BloomEnable )
 		m_pMaterialParam_BloomEnable->SetIntValue( s_PostBloomEnable );
+
+	if ( m_pMaterialParam_CryostasisEnable )
+		m_pMaterialParam_CryostasisEnable->SetIntValue( s_PostCryostasisEnable );
+
+	if ( m_pMaterialParam_CryostasisInternal1 )
+		m_pMaterialParam_CryostasisInternal1->SetVecValue( s_vCryostasisInternal1, 4 );
+
+	if ( m_pMaterialParam_CryostasisInternal2 )
+		m_pMaterialParam_CryostasisInternal2->SetVecValue( s_vCryostasisInternal2, 4 );
+
+	if ( m_pMaterialParam_CryostasisInternal3 )
+		m_pMaterialParam_CryostasisInternal3->SetVecValue( s_vCryostasisInternal3, 4 );
+
+	if ( m_pMaterialParam_CryostasisInternal4 )
+		m_pMaterialParam_CryostasisInternal4->SetVecValue( s_vCryostasisInternal4, 4 );
+
+	if ( m_pMaterialParam_CryostasisInternal5 )
+		m_pMaterialParam_CryostasisInternal5->SetVecValue( s_vCryostasisInternal5, 4 );
 }
 
 IMaterial *CEnginePostMaterialProxy::GetMaterial()
@@ -1514,6 +1564,40 @@ void CEnginePostMaterialProxy::SetupEnginePostMaterialAA( bool bPerformSoftwareA
 		// Zero-strength AA is interpreted as "AA disabled"
 		s_vBloomAAValues[0] = 0.0f;
 	}
+}
+
+void CEnginePostMaterialProxy::SetupEnginePostMaterialCryostasis( bool bPerformCryostasis )
+{
+	s_PostCryostasisEnable = bPerformCryostasis ? 1 : 0;
+
+	const float flIntensity = bPerformCryostasis ? CryostasisClamp( mat_cryostasis_intensity.GetFloat(), 0.0f, 2.0f ) : 0.0f;
+	const float flShaderIntensity = CryostasisClamp( flIntensity, 0.0f, 1.0f );
+
+	// Active Cryostasis.ini values, packed for engine_post_ps2x.fxc.
+	s_vCryostasisInternal1[0] = flShaderIntensity;	// Global shader blend, 1.0 == preset parity.
+	s_vCryostasisInternal1[1] = 0.25f;				// Curves Contrast.
+	s_vCryostasisInternal1[2] = 0.25f;				// PandaFX Blend_Amount.
+	s_vCryostasisInternal1[3] = 0.1903317f;			// MagicHDR log10(BloomAmount + 1.0), BloomAmount = 0.55.
+
+	s_vCryostasisInternal2[0] = 0.90f;				// PandaFX Contrast_R.
+	s_vCryostasisInternal2[1] = 0.80f;				// PandaFX Contrast_G.
+	s_vCryostasisInternal2[2] = 0.80f;				// PandaFX Contrast_B.
+	s_vCryostasisInternal2[3] = 0.99f;				// PandaFX Gamma_B.
+
+	s_vCryostasisInternal3[0] = 7.806838f;			// MagicHDR exp(BloomBrightness), BloomBrightness = 2.055.
+	s_vCryostasisInternal3[1] = 0.80f;				// MagicHDR BlendingBase.
+	s_vCryostasisInternal3[2] = 0.50f;				// MagicHDR BlendingAmount.
+	s_vCryostasisInternal3[3] = 0.0f;				// MagicHDR BloomSaturation.
+
+	s_vCryostasisInternal4[0] = 5.990005f;			// AmbientLight alInt.
+	s_vCryostasisInternal4[1] = 3.861f;				// AmbientLight alThreshold.
+	s_vCryostasisInternal4[2] = 0.819f;				// AmbientLight alDirtInt.
+	s_vCryostasisInternal4[3] = 0.425f;				// AmbientLight alDirtOVInt.
+
+	s_vCryostasisInternal5[0] = 0.011f;				// Emphasize FocusDepth.
+	s_vCryostasisInternal5[1] = 0.001f;				// Emphasize FocusRangeDepth.
+	s_vCryostasisInternal5[2] = 0.050f;				// Emphasize FocusEdgeDepth.
+	s_vCryostasisInternal5[3] = 0.900f;				// Emphasize EffectFactor.
 }
 
 void CEnginePostMaterialProxy::SetupEnginePostMaterialTextureTransform( const Vector4D & fullViewportBloomUVs, const Vector4D & fullViewportFBUVs, Vector2D fbSize )
@@ -1552,16 +1636,17 @@ void CEnginePostMaterialProxy::SetupEnginePostMaterialTextureTransform( const Ve
 }
 
 IMaterial * CEnginePostMaterialProxy::SetupEnginePostMaterial(	const Vector4D & fullViewportBloomUVs, const Vector4D & fullViewportFBUVs, const Vector2D & destTexSize,
-																bool bPerformSoftwareAA, bool bPerformBloom, bool bPerformColCorrect, float flAAStrength )
+																bool bPerformSoftwareAA, bool bPerformBloom, bool bPerformColCorrect, float flAAStrength, bool bPerformCryostasis )
 {
 	// Shouldn't get here if none of the effects are enabled
-	Assert( bPerformSoftwareAA || bPerformBloom || bPerformColCorrect );
+	Assert( bPerformSoftwareAA || bPerformBloom || bPerformColCorrect || bPerformCryostasis );
 
 	s_PostBloomEnable		= bPerformBloom ? 1 : 0;
 
 	SetupEnginePostMaterialAA( bPerformSoftwareAA, flAAStrength );
+	SetupEnginePostMaterialCryostasis( bPerformCryostasis );
 
-	if ( bPerformSoftwareAA || bPerformColCorrect )
+	if ( bPerformSoftwareAA || bPerformColCorrect || bPerformCryostasis )
 	{
 		SetupEnginePostMaterialTextureTransform( fullViewportBloomUVs, fullViewportFBUVs, destTexSize );
 		return materials->FindMaterial( "dev/engine_post", TEXTURE_GROUP_OTHER, true);
@@ -2528,14 +2613,23 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 			// bloom, software-AA and colour-correction (applied in 1 pass, after generation of the bloom texture)
 			bool  bPerformSoftwareAA	= IsX360() && ( engine->GetDXSupportLevel() >= 90 ) && ( flAAStrength != 0.0f );
 			bool  bPerformBloom			= !bPostVGui && ( flBloomScale > 0.0f ) && ( engine->GetDXSupportLevel() >= 90 );
+			bool  bPerformCryostasis	= !bPostVGui && s_bCryostasisPostProcessActive && ( engine->GetDXSupportLevel() >= 90 );
 			bool  bPerformColCorrect	= !bPostVGui && 
 										  ( g_pMaterialSystemHardwareConfig->GetDXSupportLevel() >= 90) &&
 										  ( g_pMaterialSystemHardwareConfig->GetHDRType() != HDR_TYPE_FLOAT ) &&
 										  g_pColorCorrectionMgr->HasNonZeroColorCorrectionWeights() &&
 										  mat_colorcorrection.GetInt();
 			bool  bSplitScreenHDR		= mat_show_ab_hdr.GetInt();
+			if ( bPerformCryostasis )
+			{
+				bPerformBloom = true;
+				if ( flBloomScale <= 0.0f )
+				{
+					flBloomScale = mat_cryostasis_bloom_scale.GetFloat();
+				}
+			}
 			pRenderContext->EnableColorCorrection( bPerformColCorrect );
-			if ( bPerformBloom || bPerformSoftwareAA || bPerformColCorrect )
+			if ( bPerformBloom || bPerformSoftwareAA || bPerformColCorrect || bPerformCryostasis )
 			{
 				tmZone( TELEMETRY_LEVEL0, TMZF_NONE, "ColorCorrection" );
 
@@ -2556,6 +2650,11 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 				if ( bPerformBloom )
 				{
 					Generate8BitBloomTexture( pRenderContext, flBloomScale, x, y, w, h );
+				}
+
+				if ( bPerformCryostasis )
+				{
+					UpdateFullScreenDepthTexture();
 				}
 
 				// Now add bloom (dest_rt0) to the framebuffer and perform software anti-aliasing and
@@ -2601,11 +2700,11 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 				{
 					bool bFBUpdated = false;
 
-					if ( mat_postprocessing_combine.GetInt() )
+					if ( mat_postprocessing_combine.GetInt() || bPerformCryostasis )
 					{
 						// Perform post-processing in one combined pass
 
-						IMaterial *post_mat = CEnginePostMaterialProxy::SetupEnginePostMaterial( fullViewportPostSrcCorners, fullViewportPostDestCorners, destTexSize, bPerformSoftwareAA, bPerformBloom, bPerformColCorrect, flAAStrength );
+						IMaterial *post_mat = CEnginePostMaterialProxy::SetupEnginePostMaterial( fullViewportPostSrcCorners, fullViewportPostDestCorners, destTexSize, bPerformSoftwareAA, bPerformBloom, bPerformColCorrect, flAAStrength, bPerformCryostasis );
 
 						if (bSplitScreenHDR)
 						{
@@ -2633,7 +2732,7 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 						// Perform post-processing in three separate passes
 						if ( bPerformSoftwareAA )
 						{
-							IMaterial *aa_mat = CEnginePostMaterialProxy::SetupEnginePostMaterial( fullViewportPostSrcCorners, fullViewportPostDestCorners, destTexSize, bPerformSoftwareAA, false, false, flAAStrength );
+							IMaterial *aa_mat = CEnginePostMaterialProxy::SetupEnginePostMaterial( fullViewportPostSrcCorners, fullViewportPostDestCorners, destTexSize, bPerformSoftwareAA, false, false, flAAStrength, false );
 
 							if (bSplitScreenHDR)
 							{
@@ -2658,7 +2757,7 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 
 						if ( bPerformBloom )
 						{
-							IMaterial *bloom_mat = CEnginePostMaterialProxy::SetupEnginePostMaterial( fullViewportPostSrcCorners, fullViewportPostDestCorners, destTexSize, false, bPerformBloom, false, flAAStrength );
+							IMaterial *bloom_mat = CEnginePostMaterialProxy::SetupEnginePostMaterial( fullViewportPostSrcCorners, fullViewportPostDestCorners, destTexSize, false, bPerformBloom, false, flAAStrength, false );
 
 							if (bSplitScreenHDR)
 							{
@@ -2689,7 +2788,7 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 								UpdateScreenEffectTexture( 0, x, y, w, h, false, &actualRect );
 							}
 
-							IMaterial *colcorrect_mat = CEnginePostMaterialProxy::SetupEnginePostMaterial( fullViewportPostSrcCorners, fullViewportPostDestCorners, destTexSize, false, false, bPerformColCorrect, flAAStrength );
+							IMaterial *colcorrect_mat = CEnginePostMaterialProxy::SetupEnginePostMaterial( fullViewportPostSrcCorners, fullViewportPostDestCorners, destTexSize, false, false, bPerformColCorrect, flAAStrength, false );
 
 							if (bSplitScreenHDR)
 							{

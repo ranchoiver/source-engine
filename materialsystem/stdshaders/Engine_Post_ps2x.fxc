@@ -13,6 +13,9 @@
 // DYNAMIC: "AA_REDUCE_ONE_PIXEL_LINE_BLUR"	"0..1"	[ps20b]
 // DYNAMIC: "AA_REDUCE_ONE_PIXEL_LINE_BLUR"	"0..1"	[ps30]
 // DYNAMIC: "COL_CORRECT_NUM_LOOKUPS"		"0..4"
+// DYNAMIC: "CRYOSTASIS_ENABLE"				"0..0"	[ps20]
+// DYNAMIC: "CRYOSTASIS_ENABLE"				"0..1"	[ps20b]
+// DYNAMIC: "CRYOSTASIS_ENABLE"				"0..1"	[ps30]
 
 #define HDRTYPE HDR_TYPE_NONE
 #include "common_ps_fxc.h"
@@ -85,6 +88,7 @@ sampler	ColorCorrectionVolumeTexture0	: register( s2 );
 sampler	ColorCorrectionVolumeTexture1	: register( s3 );
 sampler	ColorCorrectionVolumeTexture2	: register( s4 );
 sampler	ColorCorrectionVolumeTexture3	: register( s5 );
+sampler	FullFrameDepthSampler			: register( s6 );
 
 float4	psTapOffs_Packed				: register( c0 ); // psTapOffs_packed contains 1-pixel offsets: ( +dX, 0, +dY, -dX )
 float4	tweakables						: register( c1 ); // (x - AA strength/unused) (y - reduction of 1-pixel-line blur)
@@ -94,6 +98,11 @@ float4	uvTransform						: register( c2 ); // Transform BaseTexture UVs for use w
 float	ColorCorrectionDefaultWeight	: register( c3 );
 float4	ColorCorrectionVolumeWeights	: register( c4 );
 float	BloomFactor						: register( c5 );
+float4	CryostasisInternal1			: register( c6 ); // x intensity, y Curves contrast, z Panda blend, w MagicHDR bloom blend
+float4	CryostasisInternal2			: register( c7 ); // xyz Panda contrast, w Panda blue gamma
+float4	CryostasisInternal3			: register( c8 ); // x Magic bloom brightness multiplier, y/z blend shape, w bloom saturation
+float4	CryostasisInternal4			: register( c9 ); // x AmbientLight intensity, y threshold, z dirt, w dirt overlay
+float4	CryostasisInternal5			: register( c10 ); // x focus depth, y focus range, z focus edge, w effect factor
 
 float4 GetBloomColor( float2 bloomUV )
 {
@@ -377,6 +386,132 @@ float2 PerformUVTransform( float2 bloomUVs )
 	return bloomUVs*uvTransform.wz + uvTransform.xy;
 }
 
+#if ( CRYOSTASIS_ENABLE == 1 )
+
+float CryostasisAdjustableSigmoidCurve( float value, float amount )
+{
+	return ( value < 0.5f )
+		? pow( value, amount ) * pow( 2.0f, amount ) * 0.5f
+		: 1.0f - pow( 1.0f - value, amount ) * pow( 2.0f, amount ) * 0.5f;
+}
+
+float3 CryostasisReinhardInverse( float3 color )
+{
+	return -( color / min( color - 1.0f, -0.1f ) );
+}
+
+float3 CryostasisBakingLabACES( float3 color )
+{
+	const float A = 0.0245786f;
+	const float B = 0.000090537f;
+	const float C = 0.983729f;
+	const float D = 0.4329510f;
+	const float E = 0.238081f;
+
+	return saturate( ( color * ( color + A ) - B ) / ( color * ( C * color + D ) + E ) );
+}
+
+float3 CryostasisAmbientLight( float3 baseColor, float3 sourceBloom, float intensity )
+{
+	float3 high = max( sourceBloom, 0.0f );
+	high = max( high - ( CryostasisInternal4.y * 0.01f ), 0.0f );
+	high = min( 0.0325f, high ) * 1.15f;
+
+	float3 highOrig = high;
+	float highMix = max( dot( highOrig, 1.0f ), 0.001f );
+	float red = highOrig.r / highMix;
+	float green = highOrig.g / highMix;
+	float blue = highOrig.b / highMix;
+	float3 highDirt = highOrig * CryostasisInternal4.z;
+
+	// The preset enables AmbientLight dirt textures, but the shared preset archive
+	// does not include them. Treating them as white preserves the active weighting.
+	high = high + high * CryostasisInternal4.w * green;
+	high = high + highDirt;
+	high = high + highOrig * CryostasisInternal4.w * blue;
+	high = high + highOrig * CryostasisInternal4.w * red;
+
+	float3 highSampleMix = 1.0f - ( ( 1.0f - baseColor ) * ( 1.0f - high ) );
+	return lerp( baseColor, highSampleMix, CryostasisInternal4.x * intensity );
+}
+
+float3 CryostasisCurves( float3 color, float intensity )
+{
+	const float3 lumCoeff = float3( 0.2126f, 0.7152f, 0.0722f );
+	float luma = dot( lumCoeff, color );
+	float3 chroma = color - luma;
+	float curve = luma * ( luma * ( 1.5f - luma ) + 0.5f );
+	float contrastBlend = CryostasisInternal1.y * 2.0f * intensity;
+	float newLuma = lerp( luma, curve, contrastBlend );
+
+	return newLuma + chroma;
+}
+
+float3 CryostasisPandaFX( float3 color, float intensity )
+{
+	float3 original = color;
+	float3 graded = saturate( color );
+
+	graded.b = pow( graded.b, CryostasisInternal2.w );
+	graded.r = CryostasisAdjustableSigmoidCurve( graded.r, CryostasisInternal2.x );
+	graded.g = CryostasisAdjustableSigmoidCurve( graded.g, CryostasisInternal2.y );
+	graded.b = CryostasisAdjustableSigmoidCurve( graded.b, CryostasisInternal2.z );
+
+	graded.g = graded.g * 0.8f + graded.b * 0.2f;
+
+	float red = saturate( graded.r - graded.g - graded.b );
+	float green = saturate( graded.g - graded.r - graded.b );
+	float blue = saturate( graded.b - graded.r - graded.g );
+
+	graded *= 1.0f - red * 0.6f;
+	graded *= 1.0f - green * 0.8f;
+	graded *= 1.0f - blue * 0.3f;
+
+	return lerp( original, graded, saturate( CryostasisInternal1.z * intensity ) );
+}
+
+float3 CryostasisMagicHDR( float3 color, float3 sourceBloom, float intensity )
+{
+	const float3 lumCoeff = float3( 0.2126f, 0.7152f, 0.0722f );
+	float bloomLuma = dot( lumCoeff, saturate( sourceBloom ) );
+	float3 bloom = bloomLuma.xxx;
+	bloom = CryostasisReinhardInverse( saturate( bloom ) ) * CryostasisInternal3.x;
+
+	float3 hdrColor = CryostasisReinhardInverse( saturate( color ) );
+	float3 merged = lerp( hdrColor, bloom, saturate( CryostasisInternal1.w * intensity ) );
+
+	return CryostasisBakingLabACES( max( merged, 0.0f ) );
+}
+
+float3 CryostasisEmphasize( float3 color, float2 fbTexCoord, float intensity )
+{
+	float4 depthSample = tex2D( FullFrameDepthSampler, fbTexCoord );
+	float sceneDepth = saturate( max( depthSample.r, depthSample.a ) );
+	float desaturateFullRange = CryostasisInternal5.y + CryostasisInternal5.z;
+	float depthDiff = abs( sceneDepth - CryostasisInternal5.x );
+	float depthDiffCoC = saturate( ( depthDiff > desaturateFullRange ) ? 1.0f : smoothstep( CryostasisInternal5.y, desaturateFullRange, depthDiff ) );
+	float greyscaleAverage = ( color.r + color.g + color.b ) / 3.0f;
+	float3 desColor = greyscaleAverage.xxx;
+
+	return lerp( color, desColor, saturate( depthDiffCoC * CryostasisInternal5.w * intensity ) );
+}
+
+float3 CryostasisPostProcess( float3 baseColor, float3 sourceBloom, float2 fbTexCoord )
+{
+	float intensity = saturate( CryostasisInternal1.x );
+	float3 color = baseColor;
+
+	color = CryostasisAmbientLight( color, sourceBloom, intensity );
+	color = CryostasisCurves( color, intensity );
+	color = CryostasisPandaFX( color, intensity );
+	color = CryostasisMagicHDR( color, sourceBloom, intensity );
+	color = CryostasisEmphasize( color, fbTexCoord, intensity );
+
+	return color;
+}
+
+#endif
+
 struct PS_INPUT
 {
 	float2 baseTexCoord : TEXCOORD0;
@@ -418,7 +553,15 @@ float4 main( PS_INPUT i ) : COLOR
 	#endif
 
 	float4 bloomColor = BloomFactor * GetBloomColor( i.baseTexCoord );
-	outColor.rgb += bloomColor.rgb;
+	#if ( CRYOSTASIS_ENABLE == 1 )
+	{
+		outColor.rgb = CryostasisPostProcess( outColor.rgb, bloomColor.rgb, fbTexCoord );
+	}
+	#else
+	{
+		outColor.rgb += bloomColor.rgb;
+	}
+	#endif
 	outColor = PerformColorCorrection( outColor, fbTexCoord );
 	outColor = FinalOutput( outColor, 0, PIXEL_FOG_TYPE_NONE, TONEMAP_SCALE_NONE );
 
