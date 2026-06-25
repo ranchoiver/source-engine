@@ -76,6 +76,18 @@ On ToGL/OpenGL this was made worse by `togl/linuxwin/dxabstract.cpp` marking sam
   - Output ended with:
     - `Verified 384 valid shadowed WorldTwoTextureBlend ps_2_b flashlight combos.`
     - `RandomRotationSampler uses s6 and FlashlightDepthSampler uses s7 in compiled bytecode.`
+- Added and ran `scripts/build-hl2-flashlight-vcs.ps1`.
+  - It is an ad-hoc targeted VCS generator for `worldtwotextureblend_ps20b.vcs`, not a replacement for the full shader packaging pipeline.
+  - It applies the shader skip rules, compiles 3,456 valid dynamic combos across 384 static combos, writes VCS version 6 with uncompressed dynamic-combo blocks, and then reads the file back to validate header/records/sentinel/combo coverage.
+  - Default output:
+    - `.deps\hl2_flashlight_vcs\shaders\fxc\worldtwotextureblend_ps20b.vcs`
+  - Command passed:
+    - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-hl2-flashlight-vcs.ps1`
+  - Output ended with:
+    - `Static records: 384 plus sentinel`
+    - `Compiled dynamic combos: 3456`
+    - `Validated generated VCS structure and combo coverage.`
+  - Extracted one shadowed flashlight combo from the generated `.vcs` and disassembled it with the local D3DX helper; it had `RandomRotationSampler` on `s6`, `FlashlightDepthSampler` on `s7`, noise read from `s6`, and shadow-depth taps from `s7`.
 - `shadercompile.exe` was not present in the checkout, so I tried building the legacy shader compiler locally:
   - `devtools/bin/vpc.exe +vmpi +lzma /2019 /f /q` generated the needed utility projects.
   - `utils/lzma/lzma.vcxproj`, `utils/vmpi/vmpi.vcxproj`, `utils/shadercompile/shadercompile_dll.vcxproj`, and `utils/shadercompile_launcher/shadercompile_launcher.vcxproj` can be built with VS2022 `v143` after staging local x86 Waf libraries and temporary VMPI compatibility shims.
@@ -151,7 +163,7 @@ The waf build compiles the C++ engine/stdshader DLLs, but runtime shader bytecod
 - Full normal `waf configure -T release --build-games=hl2` is no longer blocked.
 - Focused build for `stdshader_dx9` and `shaderapidx9` passed.
 - Full isolated bytecode verifier for the affected shadowed flashlight shader combo family passed.
+- Targeted ad-hoc `.vcs` generation for `worldtwotextureblend_ps20b.vcs` passed under `.deps`.
 - Full `togl` link has not passed on Windows, but isolated `dxabstract.cpp` syntax check passed with Waf's SDL+ToGL arguments.
-- `worldtwotextureblend_ps20b.vcs` has not been regenerated.
-- VCS regeneration still needs either a matching Source SDK/Valve shadercompile layout or a separate, intentional shadercompile utility fix/build recipe.
+- Official full shader-set VCS regeneration still needs either a matching Source SDK/Valve shadercompile layout or a separate, intentional shadercompile utility fix/build recipe.
 - No live HL2 runtime render test has been performed in this Windows environment.

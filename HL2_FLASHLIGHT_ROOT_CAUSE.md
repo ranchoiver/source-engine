@@ -42,6 +42,20 @@ The waf build compiles the engine and `stdshader_dx9` C++ DLL, but shader byteco
 
 Without refreshed `.vcs` shader blobs, the C++/ToGL fix is present but the old shader bytecode can still contain the wrong sampler usage.
 
+For targeted testing, this repo now includes an ad-hoc generator for just the affected shader:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-hl2-flashlight-vcs.ps1
+```
+
+By default it writes:
+
+```text
+.deps\hl2_flashlight_vcs\shaders\fxc\worldtwotextureblend_ps20b.vcs
+```
+
+The generated file uses VCS version 6, uncompressed dynamic-combo blocks, 384 static records plus the sentinel, and 3,456 valid dynamic combos after applying the shader skip rules. The script reads the file back after writing it and validates the header, sorted static records, sentinel offset, and expected combo coverage. It is intentionally scoped to `worldtwotextureblend_ps20b`; the official full shader packaging path is still the normal way to produce a complete game shader set.
+
 ## Isolated Validation
 
 The repo includes a repeatable Windows-side verifier:
@@ -61,4 +75,6 @@ The verifier asserts the compiled bytecode register table and texture instructio
 
 The command passed for all 384 combos in this Windows checkout.
 
-The official `buildshaders.bat stdshader_dx9_20b` path can generate the makefile/worklist after a local Perl `String::CRC32` shim and Visual Studio environment are supplied. Full `.vcs` regeneration remains a separate packaging step because this checkout does not ship a ready-to-use `game/bin/shadercompile.exe` layout, and locally built shadercompile binaries still hit legacy utility issues before emitting `.vcs` output.
+The official `buildshaders.bat stdshader_dx9_20b` path can generate the makefile/worklist after a local Perl `String::CRC32` shim and Visual Studio environment are supplied. Full official `.vcs` regeneration remains a separate packaging step because this checkout does not ship a ready-to-use `game/bin/shadercompile.exe` layout, and locally built shadercompile binaries still hit legacy utility issues before emitting `.vcs` output.
+
+As an additional package-level spot check, a shadowed flashlight combo extracted from the targeted `.vcs` disassembles with `RandomRotationSampler` on `s6`, `FlashlightDepthSampler` on `s7`, the noise read from `s6`, and depth taps from `s7`.
