@@ -96,6 +96,8 @@ static CTextureReference g_FullFrameFBTexture1;
 static CTextureReference g_FullFrameFBTexture2;
 static CTextureReference g_FullFrameDepth;
 static CTextureReference g_ResolvedFullFrameDepth;
+static CTextureReference g_CryostasisBloomTexture[7];
+static CTextureReference g_CryostasisTempTexture;
 
 void WorldStaticMeshCreate( void );
 void WorldStaticMeshDestroy( void );
@@ -1098,6 +1100,19 @@ static ITexture *CreateTeenyFBTexture( int n )
 		fmt, MATERIAL_RT_DEPTH_SHARED );
 }
 
+static ITexture *CreateCryostasisQuarterSizedFBTexture( const char *pTextureName )
+{
+	ImageFormat fmt = materials->GetBackBufferFormat();
+	if ( g_pMaterialSystemHardwareConfig->GetHDRType() == HDR_TYPE_FLOAT )
+		fmt = IMAGE_FORMAT_RGBA16161616F;
+
+	return materials->CreateNamedRenderTargetTextureEx2(
+		pTextureName, 0, 0, RT_SIZE_HDR,
+		fmt, MATERIAL_RT_DEPTH_SHARED,
+		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT,
+		CREATERENDERTARGETFLAGS_HDR );
+}
+
 static ITexture *CreateFullFrameFBTexture( int textureIndex, int iExtraFlags = 0 )
 {
 	char textureName[256];
@@ -1219,6 +1234,18 @@ void InitWellKnownRenderTargets( void )
 		g_TeenyFBTexture2.Init( CreateTeenyFBTexture( 2 ) );
 	}
 
+	if ( IsPC() && g_pMaterialSystemHardwareConfig->GetDXSupportLevel() >= 90 )
+	{
+		for ( int i = 0; i < ARRAYSIZE( g_CryostasisBloomTexture ); ++i )
+		{
+			char textureName[32];
+			V_snprintf( textureName, sizeof( textureName ), "_rt_CryostasisBloom%d", i );
+			g_CryostasisBloomTexture[i].Init( CreateCryostasisQuarterSizedFBTexture( textureName ) );
+		}
+
+		g_CryostasisTempTexture.Init( CreateCryostasisQuarterSizedFBTexture( "_rt_CryostasisTemp" ) );
+	}
+
 	g_FullFrameFBTexture0.Init( CreateFullFrameFBTexture( 0 ) );
 	g_FullFrameFBTexture1.Init( CreateFullFrameFBTexture( 1 ) );
 
@@ -1291,6 +1318,11 @@ void ShutdownWellKnownRenderTargets( void )
 	g_TeenyFBTexture0.Shutdown();
 	g_TeenyFBTexture1.Shutdown();
 	g_TeenyFBTexture2.Shutdown();
+	for ( int i = 0; i < ARRAYSIZE( g_CryostasisBloomTexture ); ++i )
+	{
+		g_CryostasisBloomTexture[i].Shutdown();
+	}
+	g_CryostasisTempTexture.Shutdown();
 	g_FullFrameFBTexture0.Shutdown();
 	g_FullFrameFBTexture1.Shutdown();
 	if ( IsX360() )

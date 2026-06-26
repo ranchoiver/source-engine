@@ -1,0 +1,27 @@
+#define HDRTYPE HDR_TYPE_NONE
+#include "common_ps_fxc.h"
+
+sampler BaseTextureSampler : register( s0 );
+
+float4 CryostasisBlurParams : register( c0 ); // xy blur texel step, zw source active-region scale
+
+struct PS_INPUT
+{
+	float2 baseTexCoord : TEXCOORD0;
+};
+
+float4 main( PS_INPUT i ) : COLOR
+{
+	float2 uv = i.baseTexCoord * CryostasisBlurParams.zw;
+	float2 stepUV = CryostasisBlurParams.xy;
+
+	float4 color = tex2D( BaseTextureSampler, uv ) * 0.2213510889f;
+	color += ( tex2D( BaseTextureSampler, uv + stepUV * 1.0f ) + tex2D( BaseTextureSampler, uv - stepUV * 1.0f ) ) * 0.1897872911f;
+	color += ( tex2D( BaseTextureSampler, uv + stepUV * 2.0f ) + tex2D( BaseTextureSampler, uv - stepUV * 2.0f ) ) * 0.1196254322f;
+	color += ( tex2D( BaseTextureSampler, uv + stepUV * 3.0f ) + tex2D( BaseTextureSampler, uv - stepUV * 3.0f ) ) * 0.0554307611f;
+	color += ( tex2D( BaseTextureSampler, uv + stepUV * 4.0f ) + tex2D( BaseTextureSampler, uv - stepUV * 4.0f ) ) * 0.0188820478f;
+	color += ( tex2D( BaseTextureSampler, uv + stepUV * 5.0f ) + tex2D( BaseTextureSampler, uv - stepUV * 5.0f ) ) * 0.0047284442f;
+	color += ( tex2D( BaseTextureSampler, uv + stepUV * 6.0f ) + tex2D( BaseTextureSampler, uv - stepUV * 6.0f ) ) * 0.0008704792f;
+
+	return max( color, 0.0f );
+}

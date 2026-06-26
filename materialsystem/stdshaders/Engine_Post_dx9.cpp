@@ -29,6 +29,16 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 		SHADER_PARAM( CRYOSTASISINTERNAL3,		SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal Cryostasis values set via material proxy" )
 		SHADER_PARAM( CRYOSTASISINTERNAL4,		SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal Cryostasis values set via material proxy" )
 		SHADER_PARAM( CRYOSTASISINTERNAL5,		SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal Cryostasis values set via material proxy" )
+		SHADER_PARAM( CRYOSTASISBLOOM0,			SHADER_PARAM_TYPE_TEXTURE,	"_rt_CryostasisBloom0",	"HL2 Cryostasis MagicHDR bloom LOD 0" )
+		SHADER_PARAM( CRYOSTASISBLOOM1,			SHADER_PARAM_TYPE_TEXTURE,	"_rt_CryostasisBloom1",	"HL2 Cryostasis MagicHDR bloom LOD 1" )
+		SHADER_PARAM( CRYOSTASISBLOOM2,			SHADER_PARAM_TYPE_TEXTURE,	"_rt_CryostasisBloom2",	"HL2 Cryostasis MagicHDR bloom LOD 2" )
+		SHADER_PARAM( CRYOSTASISBLOOM3,			SHADER_PARAM_TYPE_TEXTURE,	"_rt_CryostasisBloom3",	"HL2 Cryostasis MagicHDR bloom LOD 3" )
+		SHADER_PARAM( CRYOSTASISBLOOM4,			SHADER_PARAM_TYPE_TEXTURE,	"_rt_CryostasisBloom4",	"HL2 Cryostasis MagicHDR bloom LOD 4" )
+		SHADER_PARAM( CRYOSTASISBLOOM5,			SHADER_PARAM_TYPE_TEXTURE,	"_rt_CryostasisBloom5",	"HL2 Cryostasis MagicHDR bloom LOD 5" )
+		SHADER_PARAM( CRYOSTASISBLOOM6,			SHADER_PARAM_TYPE_TEXTURE,	"_rt_CryostasisBloom6",	"HL2 Cryostasis MagicHDR bloom LOD 6" )
+		SHADER_PARAM( CRYOSTASISDIRT,			SHADER_PARAM_TYPE_TEXTURE,	"reshade/cryostasis/Dirt",		"HL2 Cryostasis AmbientLight Dirt.png" )
+		SHADER_PARAM( CRYOSTASISDIRTOVR,		SHADER_PARAM_TYPE_TEXTURE,	"reshade/cryostasis/DirtOVR",	"HL2 Cryostasis AmbientLight DirtOVR.png" )
+		SHADER_PARAM( CRYOSTASISDIRTOVB,		SHADER_PARAM_TYPE_TEXTURE,	"reshade/cryostasis/DirtOVB",	"HL2 Cryostasis AmbientLight DirtOVB.png" )
 	END_SHADER_PARAMS
 
 	SHADER_INIT_PARAMS()
@@ -96,6 +106,46 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 		{
 			LoadTexture( FBTEXTURE );
 		}
+		if ( params[CRYOSTASISBLOOM0]->IsDefined() )
+		{
+			LoadTexture( CRYOSTASISBLOOM0 );
+		}
+		if ( params[CRYOSTASISBLOOM1]->IsDefined() )
+		{
+			LoadTexture( CRYOSTASISBLOOM1 );
+		}
+		if ( params[CRYOSTASISBLOOM2]->IsDefined() )
+		{
+			LoadTexture( CRYOSTASISBLOOM2 );
+		}
+		if ( params[CRYOSTASISBLOOM3]->IsDefined() )
+		{
+			LoadTexture( CRYOSTASISBLOOM3 );
+		}
+		if ( params[CRYOSTASISBLOOM4]->IsDefined() )
+		{
+			LoadTexture( CRYOSTASISBLOOM4 );
+		}
+		if ( params[CRYOSTASISBLOOM5]->IsDefined() )
+		{
+			LoadTexture( CRYOSTASISBLOOM5 );
+		}
+		if ( params[CRYOSTASISBLOOM6]->IsDefined() )
+		{
+			LoadTexture( CRYOSTASISBLOOM6 );
+		}
+		if ( params[CRYOSTASISDIRT]->IsDefined() )
+		{
+			LoadTexture( CRYOSTASISDIRT );
+		}
+		if ( params[CRYOSTASISDIRTOVR]->IsDefined() )
+		{
+			LoadTexture( CRYOSTASISDIRTOVR );
+		}
+		if ( params[CRYOSTASISDIRTOVB]->IsDefined() )
+		{
+			LoadTexture( CRYOSTASISDIRTOVB );
+		}
 	}
 
 	SHADER_DRAW
@@ -147,6 +197,28 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER6, true );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER6, false );
 
+			// MagicHDR's remaining bloom LODs are bound to samplers 7-12.
+			pShaderShadow->EnableTexture(  SHADER_SAMPLER7, true );
+			pShaderShadow->EnableTexture(  SHADER_SAMPLER8, true );
+			pShaderShadow->EnableTexture(  SHADER_SAMPLER9, true );
+			pShaderShadow->EnableTexture(  SHADER_SAMPLER10, true );
+			pShaderShadow->EnableTexture(  SHADER_SAMPLER11, true );
+			pShaderShadow->EnableTexture(  SHADER_SAMPLER12, true );
+
+			// AmbientLight dirt textures use the last three ps_2_b samplers.
+			pShaderShadow->EnableTexture(  SHADER_SAMPLER13, true );
+			pShaderShadow->EnableTexture(  SHADER_SAMPLER14, true );
+			pShaderShadow->EnableTexture(  SHADER_SAMPLER15, true );
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER7, false );
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER8, false );
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER9, false );
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER10, false );
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER11, false );
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER12, false );
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER13, false );
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER14, false );
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER15, false );
+
 			int		format				= VERTEX_POSITION;
 			int		numTexCoords		= 1;
 			int *	pTexCoordDimensions	= NULL;
@@ -171,7 +243,6 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 		}
 		DYNAMIC_STATE
 		{
-			BindTexture( SHADER_SAMPLER0, BASETEXTURE, -1 );
 			// FIXME: need to set FBTEXTURE to be point-sampled (will speed up this shader significantly on 360)
 			//        and assert that it's set to SHADER_TEXWRAPMODE_CLAMP (since the shader will sample offscreen)
 			BindTexture( SHADER_SAMPLER1, FBTEXTURE,   -1 );
@@ -225,6 +296,11 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			int cryostasisEnabled			=    ( params[ CRYOSTASISENABLE ]->GetIntValue()    == 0    ) ? 0 : 1;
 			cryostasisEnabled				= cryostasisEnabled && ( g_pHardwareConfig->SupportsPixelShaders_2_b() || g_pHardwareConfig->ShouldAlwaysUseShaderModel2bShaders() );
 
+			if ( cryostasisEnabled )
+				BindTexture( SHADER_SAMPLER0, CRYOSTASISBLOOM0, -1 );
+			else
+				BindTexture( SHADER_SAMPLER0, BASETEXTURE, -1 );
+
 			float flBloomFactor = bloomEnabled ? 1.0f : 0.0f;
 			float bloomConstant[4] = { flBloomFactor, flBloomFactor, flBloomFactor, flBloomFactor };
 			pShaderAPI->SetPixelShaderConstant( 5, bloomConstant );
@@ -237,6 +313,15 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			if ( cryostasisEnabled )
 			{
 				pShaderAPI->BindStandardTexture( SHADER_SAMPLER6, TEXTURE_FRAME_BUFFER_FULL_DEPTH );
+				BindTexture( SHADER_SAMPLER7, CRYOSTASISBLOOM1, -1 );
+				BindTexture( SHADER_SAMPLER8, CRYOSTASISBLOOM2, -1 );
+				BindTexture( SHADER_SAMPLER9, CRYOSTASISBLOOM3, -1 );
+				BindTexture( SHADER_SAMPLER10, CRYOSTASISBLOOM4, -1 );
+				BindTexture( SHADER_SAMPLER11, CRYOSTASISBLOOM5, -1 );
+				BindTexture( SHADER_SAMPLER12, CRYOSTASISBLOOM6, -1 );
+				BindTexture( SHADER_SAMPLER13, CRYOSTASISDIRT, -1 );
+				BindTexture( SHADER_SAMPLER14, CRYOSTASISDIRTOVR, -1 );
+				BindTexture( SHADER_SAMPLER15, CRYOSTASISDIRTOVB, -1 );
 			}
 
 			if ( !colCorrectEnabled )

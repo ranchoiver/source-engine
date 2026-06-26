@@ -1,0 +1,37 @@
+#define HDRTYPE HDR_TYPE_NONE
+#include "common_ps_fxc.h"
+
+sampler BaseTextureSampler : register( s0 );
+
+float4 CryostasisMagicHDRParams : register( c0 ); // x bloom brightness multiplier, y bloom saturation
+
+struct PS_INPUT
+{
+	float2 baseTexCoord : TEXCOORD0;
+};
+
+float3 CryostasisApplySaturation( float3 color, float saturation )
+{
+	const float3 lumCoeff = float3( 0.2126f, 0.7152f, 0.0722f );
+	float luma = dot( lumCoeff, color );
+	return lerp( luma.xxx, color, saturation );
+}
+
+float3 CryostasisReinhardInverse( float3 color )
+{
+	return -( color / min( color - 1.0f, -0.1f ) );
+}
+
+float4 main( PS_INPUT i ) : COLOR
+{
+	float4 color = tex2D( BaseTextureSampler, i.baseTexCoord );
+	float saturation = CryostasisMagicHDRParams.y > 1.0f
+		? pow( abs( CryostasisMagicHDRParams.y ), 2.0f )
+		: CryostasisMagicHDRParams.y;
+
+	color.rgb = saturate( CryostasisApplySaturation( color.rgb, saturation ) );
+	color.rgb = CryostasisReinhardInverse( color.rgb );
+	color.rgb *= CryostasisMagicHDRParams.x;
+
+	return float4( max( color.rgb, 0.0f ), 1.0f );
+}
