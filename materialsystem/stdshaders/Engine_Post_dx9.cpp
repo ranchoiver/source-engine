@@ -183,7 +183,8 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER1, true  );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER1, bForceSRGBReadsAndWrites );
 
-			// Up to 4 (sRGB) color-correction lookup textures are bound to samplers 2-5:
+			// Up to 4 (sRGB) color-correction lookup textures are bound to samplers 2-5.
+			// Cryostasis disables native color correction and reuses samplers 2-4 for AmbientLight dirt.
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER2, true );
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER3, true );
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER4, true );
@@ -205,19 +206,12 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER11, true );
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER12, true );
 
-			// AmbientLight dirt textures use the last three ps_2_b samplers.
-			pShaderShadow->EnableTexture(  SHADER_SAMPLER13, true );
-			pShaderShadow->EnableTexture(  SHADER_SAMPLER14, true );
-			pShaderShadow->EnableTexture(  SHADER_SAMPLER15, true );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER7, false );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER8, false );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER9, false );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER10, false );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER11, false );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER12, false );
-			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER13, false );
-			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER14, false );
-			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER15, false );
 
 			int		format				= VERTEX_POSITION;
 			int		numTexCoords		= 1;
@@ -294,7 +288,12 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			int bloomEnabled				=    ( params[ BLOOMENABLE      ]->GetIntValue()    == 0    ) ? 0 : 1;
 			int colCorrectEnabled			=    ccInfo.m_bIsEnabled;
 			int cryostasisEnabled			=    ( params[ CRYOSTASISENABLE ]->GetIntValue()    == 0    ) ? 0 : 1;
-			cryostasisEnabled				= cryostasisEnabled && ( g_pHardwareConfig->SupportsPixelShaders_2_b() || g_pHardwareConfig->ShouldAlwaysUseShaderModel2bShaders() );
+			cryostasisEnabled				= cryostasisEnabled && g_pHardwareConfig->SupportsPixelShaders_2_b() && !IsOSX();
+			if ( cryostasisEnabled )
+			{
+				colCorrectEnabled = 0;
+				colCorrectNumLookups = 0;
+			}
 
 			if ( cryostasisEnabled )
 				BindTexture( SHADER_SAMPLER0, CRYOSTASISBLOOM0, -1 );
@@ -312,6 +311,9 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			pShaderAPI->SetPixelShaderConstant( 10, params[ CRYOSTASISINTERNAL5 ]->GetVecValue(), 1 );
 			if ( cryostasisEnabled )
 			{
+				BindTexture( SHADER_SAMPLER2, CRYOSTASISDIRT, -1 );
+				BindTexture( SHADER_SAMPLER3, CRYOSTASISDIRTOVR, -1 );
+				BindTexture( SHADER_SAMPLER4, CRYOSTASISDIRTOVB, -1 );
 				pShaderAPI->BindStandardTexture( SHADER_SAMPLER6, TEXTURE_FRAME_BUFFER_FULL_DEPTH );
 				BindTexture( SHADER_SAMPLER7, CRYOSTASISBLOOM1, -1 );
 				BindTexture( SHADER_SAMPLER8, CRYOSTASISBLOOM2, -1 );
@@ -319,9 +321,6 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 				BindTexture( SHADER_SAMPLER10, CRYOSTASISBLOOM4, -1 );
 				BindTexture( SHADER_SAMPLER11, CRYOSTASISBLOOM5, -1 );
 				BindTexture( SHADER_SAMPLER12, CRYOSTASISBLOOM6, -1 );
-				BindTexture( SHADER_SAMPLER13, CRYOSTASISDIRT, -1 );
-				BindTexture( SHADER_SAMPLER14, CRYOSTASISDIRTOVR, -1 );
-				BindTexture( SHADER_SAMPLER15, CRYOSTASISDIRTOVB, -1 );
 			}
 
 			if ( !colCorrectEnabled )

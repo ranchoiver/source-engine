@@ -1154,6 +1154,13 @@ static const char *s_pCryostasisBloomTextureNames[] =
 	"_rt_CryostasisBloom6",
 };
 
+static bool CanRunCryostasisPostProcess()
+{
+	return IsPC() && !IsOSX() &&
+		engine->GetDXSupportLevel() >= 90 &&
+		g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b();
+}
+
 struct CryostasisPostProcessSnapshot_t
 {
 	bool m_bValid;
@@ -1346,42 +1353,45 @@ static void SetCryostasisMaterialVec4( IMaterial *pMaterial, const char *pVarNam
 	}
 }
 
-static void DrawCryostasisPostPass( IMatRenderContext *pRenderContext, IMaterial *pMaterial, int nDestWidth, int nDestHeight, ITexture *pSourceTexture )
+static void DrawCryostasisPostPass( IMatRenderContext *pRenderContext, IMaterial *pMaterial, int nDestWidth, int nDestHeight, ITexture *pSourceTexture, float flSourceWidthScale = 1.0f, float flSourceHeightScale = 1.0f )
 {
+	const float flSourceMaxX = ( pSourceTexture->GetActualWidth() * flSourceWidthScale ) - 1.0f;
+	const float flSourceMaxY = ( pSourceTexture->GetActualHeight() * flSourceHeightScale ) - 1.0f;
+
 	pRenderContext->DrawScreenSpaceRectangle(
 		pMaterial,
 		0, 0,
 		nDestWidth, nDestHeight,
 		0.0f, 0.0f,
-		pSourceTexture->GetActualWidth() - 1,
-		pSourceTexture->GetActualHeight() - 1,
+		flSourceMaxX,
+		flSourceMaxY,
 		pSourceTexture->GetActualWidth(),
 		pSourceTexture->GetActualHeight() );
 }
 
-static void GenerateCryostasisMagicHDRBloomTextures( IMatRenderContext *pRenderContext, int nSrcWidth, int nSrcHeight )
+static bool GenerateCryostasisMagicHDRBloomTextures( IMatRenderContext *pRenderContext, int nSrcWidth, int nSrcHeight )
 {
-	if ( !g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b() && !g_pMaterialSystemHardwareConfig->ShouldAlwaysUseShaderModel2bShaders() )
-		return;
+	if ( !CanRunCryostasisPostProcess() )
+		return false;
 
 	ITexture *pSource = materials->FindTexture( "_rt_FullFrameFB", TEXTURE_GROUP_RENDER_TARGET );
 	ITexture *pTemp = materials->FindTexture( "_rt_CryostasisTemp", TEXTURE_GROUP_RENDER_TARGET );
 	ITexture *pBloom[ARRAYSIZE( s_pCryostasisBloomTextureNames )];
 
 	if ( IsErrorTexture( pSource ) || IsErrorTexture( pTemp ) )
-		return;
+		return false;
 
 	for ( int i = 0; i < ARRAYSIZE( pBloom ); ++i )
 	{
 		pBloom[i] = materials->FindTexture( s_pCryostasisBloomTextureNames[i], TEXTURE_GROUP_RENDER_TARGET );
 		if ( IsErrorTexture( pBloom[i] ) )
-			return;
+			return false;
 	}
 
 	IMaterial *pInverseMaterial = GetCryostasisMagicHDRInverseMaterial();
 	IMaterial *pBlurMaterial = GetCryostasisMagicHDRBlurMaterial();
 	if ( !pInverseMaterial || !pBlurMaterial )
-		return;
+		return false;
 
 	const int nBloomWidth = pBloom[0]->GetActualWidth();
 	const int nBloomHeight = pBloom[0]->GetActualHeight();
@@ -1407,6 +1417,9 @@ static void GenerateCryostasisMagicHDRBloomTextures( IMatRenderContext *pRenderC
 		const int nInputDivisor = ( i == 0 ) ? 1 : ( 1 << ( i - 1 ) );
 		const int nActiveWidth = MAX( 1, nBloomWidth / nLevelDivisor );
 		const int nActiveHeight = MAX( 1, nBloomHeight / nLevelDivisor );
+		const int nKernelSlop = FILTER_KERNEL_SLOP + ( 6 * ( nLevelDivisor << 1 ) );
+		const int nRenderWidth = MIN( nBloomWidth, nActiveWidth + nKernelSlop );
+		const int nRenderHeight = MIN( nBloomHeight, nActiveHeight + nKernelSlop );
 		const float flBlurScale = (float)nLevelDivisor;
 		const float flInputScale = 1.0f / (float)nInputDivisor;
 
@@ -1418,11 +1431,15 @@ static void GenerateCryostasisMagicHDRBloomTextures( IMatRenderContext *pRenderC
 
 		SetCryostasisMaterialTexture( pBlurMaterial, pTemp );
 		SetCryostasisMaterialVec4( pBlurMaterial, "$cryostasisBlurParams", 0.0f, flBlurScale / (float)nBloomHeight, 1.0f, 1.0f );
-		SetRenderTargetAndViewPort( pBloom[i], nActiveWidth, nActiveHeight );
-		DrawCryostasisPostPass( pRenderContext, pBlurMaterial, nActiveWidth, nActiveHeight, pTemp );
+		SetRenderTargetAndViewPort( pBloom[i], nRenderWidth, nRenderHeight );
+		DrawCryostasisPostPass(
+			pRenderContext, pBlurMaterial, nRenderWidth, nRenderHeight, pTemp,
+			(float)nRenderWidth / (float)nActiveWidth,
+			(float)nRenderHeight / (float)nActiveHeight );
 	}
 
 	pRenderContext->PopRenderTargetAndViewport();
+	return true;
 }
 
 CON_COMMAND( hl2_cryostasis, "Apply the HL2 Cryostasis ReShade post-processing preset. Usage: hl2_cryostasis <0..2|on|off|toggle|reset|status>" )
@@ -2760,8 +2777,7 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 			// bloom, software-AA and colour-correction (applied in 1 pass, after generation of the bloom texture)
 			bool  bPerformSoftwareAA	= IsX360() && ( engine->GetDXSupportLevel() >= 90 ) && ( flAAStrength != 0.0f );
 			bool  bPerformBloom			= !bPostVGui && ( flBloomScale > 0.0f ) && ( engine->GetDXSupportLevel() >= 90 );
-			bool  bPerformCryostasis	= !bPostVGui && s_bCryostasisPostProcessActive && ( engine->GetDXSupportLevel() >= 90 ) &&
-										  ( g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b() || g_pMaterialSystemHardwareConfig->ShouldAlwaysUseShaderModel2bShaders() );
+			bool  bPerformCryostasis	= !bPostVGui && s_bCryostasisPostProcessActive && CanRunCryostasisPostProcess();
 			bool  bPerformColCorrect	= !bPostVGui && 
 										  ( g_pMaterialSystemHardwareConfig->GetDXSupportLevel() >= 90) &&
 										  ( g_pMaterialSystemHardwareConfig->GetHDRType() != HDR_TYPE_FLOAT ) &&
@@ -2775,6 +2791,7 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 				{
 					flBloomScale = mat_cryostasis_bloom_scale.GetFloat();
 				}
+				bPerformColCorrect = false;
 			}
 			pRenderContext->EnableColorCorrection( bPerformColCorrect );
 			if ( bPerformBloom || bPerformSoftwareAA || bPerformColCorrect || bPerformCryostasis )
@@ -2802,8 +2819,11 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 
 				if ( bPerformCryostasis )
 				{
-					GenerateCryostasisMagicHDRBloomTextures( pRenderContext, nSrcWidth, nSrcHeight );
-					UpdateFullScreenDepthTexture();
+					bPerformCryostasis = GenerateCryostasisMagicHDRBloomTextures( pRenderContext, nSrcWidth, nSrcHeight );
+					if ( bPerformCryostasis )
+					{
+						UpdateFullScreenDepthTexture();
+					}
 				}
 
 				// Now add bloom (dest_rt0) to the framebuffer and perform software anti-aliasing and

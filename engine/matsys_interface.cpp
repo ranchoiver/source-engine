@@ -1113,6 +1113,13 @@ static ITexture *CreateCryostasisQuarterSizedFBTexture( const char *pTextureName
 		CREATERENDERTARGETFLAGS_HDR );
 }
 
+static bool ShouldCreateCryostasisRenderTargets()
+{
+	return IsPC() && !IsOSX() &&
+		g_pMaterialSystemHardwareConfig->GetDXSupportLevel() >= 90 &&
+		g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b();
+}
+
 static ITexture *CreateFullFrameFBTexture( int textureIndex, int iExtraFlags = 0 )
 {
 	char textureName[256];
@@ -1234,7 +1241,7 @@ void InitWellKnownRenderTargets( void )
 		g_TeenyFBTexture2.Init( CreateTeenyFBTexture( 2 ) );
 	}
 
-	if ( IsPC() && g_pMaterialSystemHardwareConfig->GetDXSupportLevel() >= 90 )
+	if ( ShouldCreateCryostasisRenderTargets() )
 	{
 		for ( int i = 0; i < ARRAYSIZE( g_CryostasisBloomTexture ); ++i )
 		{
