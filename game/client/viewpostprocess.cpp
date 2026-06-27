@@ -1156,7 +1156,7 @@ static const char *s_pCryostasisBloomTextureNames[] =
 
 static bool CanRunCryostasisPostProcess()
 {
-	return IsPC() && !IsOSX() &&
+	return IsPC() &&
 		engine->GetDXSupportLevel() >= 90 &&
 		g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b();
 }
@@ -2778,11 +2778,12 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 			bool  bPerformSoftwareAA	= IsX360() && ( engine->GetDXSupportLevel() >= 90 ) && ( flAAStrength != 0.0f );
 			bool  bPerformBloom			= !bPostVGui && ( flBloomScale > 0.0f ) && ( engine->GetDXSupportLevel() >= 90 );
 			bool  bPerformCryostasis	= !bPostVGui && s_bCryostasisPostProcessActive && CanRunCryostasisPostProcess();
-			bool  bPerformColCorrect	= !bPostVGui && 
+			bool  bNativeColCorrect		= !bPostVGui &&
 										  ( g_pMaterialSystemHardwareConfig->GetDXSupportLevel() >= 90) &&
 										  ( g_pMaterialSystemHardwareConfig->GetHDRType() != HDR_TYPE_FLOAT ) &&
 										  g_pColorCorrectionMgr->HasNonZeroColorCorrectionWeights() &&
 										  mat_colorcorrection.GetInt();
+			bool  bPerformColCorrect	= bNativeColCorrect && !bPerformCryostasis;
 			bool  bSplitScreenHDR		= mat_show_ab_hdr.GetInt();
 			if ( bPerformCryostasis )
 			{
@@ -2791,7 +2792,6 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 				{
 					flBloomScale = mat_cryostasis_bloom_scale.GetFloat();
 				}
-				bPerformColCorrect = false;
 			}
 			pRenderContext->EnableColorCorrection( bPerformColCorrect );
 			if ( bPerformBloom || bPerformSoftwareAA || bPerformColCorrect || bPerformCryostasis )
@@ -2823,6 +2823,11 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 					if ( bPerformCryostasis )
 					{
 						UpdateFullScreenDepthTexture();
+					}
+					else if ( bNativeColCorrect )
+					{
+						bPerformColCorrect = true;
+						pRenderContext->EnableColorCorrection( true );
 					}
 				}
 

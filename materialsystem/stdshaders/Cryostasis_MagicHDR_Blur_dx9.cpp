@@ -47,14 +47,19 @@ BEGIN_VS_SHADER_FLAGS( Cryostasis_MagicHDR_Blur_dx9, "HL2 Cryostasis MagicHDR ga
 			pShaderShadow->EnableDepthWrites( false );
 			pShaderShadow->EnableAlphaWrites( true );
 			pShaderShadow->EnableTexture( SHADER_SAMPLER0, true );
-			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER0, false );
-			pShaderShadow->EnableSRGBWrite( false );
+
+			bool bForceSRGBReadAndWrite = IsOSX() && g_pHardwareConfig->CanDoSRGBReadFromRTs();
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER0, bForceSRGBReadAndWrite );
+			pShaderShadow->EnableSRGBWrite( bForceSRGBReadAndWrite );
 			pShaderShadow->VertexShaderVertexFormat( VERTEX_POSITION, 1, NULL, 0 );
 
 			DECLARE_STATIC_VERTEX_SHADER( screenspaceeffect_vs20 );
 			SET_STATIC_VERTEX_SHADER( screenspaceeffect_vs20 );
 
 			DECLARE_STATIC_PIXEL_SHADER( cryostasis_magichdr_blur_ps20b );
+#ifndef _X360
+			SET_STATIC_PIXEL_SHADER_COMBO( APPROX_SRGB_ADAPTER, bForceSRGBReadAndWrite );
+#endif
 			SET_STATIC_PIXEL_SHADER( cryostasis_magichdr_blur_ps20b );
 		}
 

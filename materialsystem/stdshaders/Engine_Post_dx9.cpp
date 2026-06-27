@@ -288,7 +288,7 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			int bloomEnabled				=    ( params[ BLOOMENABLE      ]->GetIntValue()    == 0    ) ? 0 : 1;
 			int colCorrectEnabled			=    ccInfo.m_bIsEnabled;
 			int cryostasisEnabled			=    ( params[ CRYOSTASISENABLE ]->GetIntValue()    == 0    ) ? 0 : 1;
-			cryostasisEnabled				= cryostasisEnabled && g_pHardwareConfig->SupportsPixelShaders_2_b() && !IsOSX();
+			cryostasisEnabled				= cryostasisEnabled && g_pHardwareConfig->SupportsPixelShaders_2_b();
 			if ( cryostasisEnabled )
 			{
 				colCorrectEnabled = 0;

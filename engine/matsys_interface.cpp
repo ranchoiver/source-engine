@@ -1115,7 +1115,7 @@ static ITexture *CreateCryostasisQuarterSizedFBTexture( const char *pTextureName
 
 static bool ShouldCreateCryostasisRenderTargets()
 {
-	return IsPC() && !IsOSX() &&
+	return IsPC() &&
 		g_pMaterialSystemHardwareConfig->GetDXSupportLevel() >= 90 &&
 		g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b();
 }

@@ -1,5 +1,11 @@
+// STATIC: "APPROX_SRGB_ADAPTER"	"0..1" [ps20b] [PC]
+
 #define HDRTYPE HDR_TYPE_NONE
 #include "common_ps_fxc.h"
+
+#ifndef APPROX_SRGB_ADAPTER
+#define APPROX_SRGB_ADAPTER 0
+#endif
 
 sampler BaseTextureSampler : register( s0 );
 
@@ -22,9 +28,22 @@ float3 CryostasisReinhardInverse( float3 color )
 	return -( color / min( color - 1.0f, -0.1f ) );
 }
 
+float3 CryostasisApproxLinearToGamma( float3 color )
+{
+	color = max( color, 0.00001f );
+	return color * rsqrt( color );
+}
+
 float4 main( PS_INPUT i ) : COLOR
 {
 	float4 color = tex2D( BaseTextureSampler, i.baseTexCoord );
+
+	#if ( APPROX_SRGB_ADAPTER == 1 )
+	{
+		color.rgb = CryostasisApproxLinearToGamma( color.rgb );
+	}
+	#endif
+
 	float saturation = CryostasisMagicHDRParams.y > 1.0f
 		? pow( abs( CryostasisMagicHDRParams.y ), 2.0f )
 		: CryostasisMagicHDRParams.y;
@@ -32,6 +51,12 @@ float4 main( PS_INPUT i ) : COLOR
 	color.rgb = saturate( CryostasisApplySaturation( color.rgb, saturation ) );
 	color.rgb = CryostasisReinhardInverse( color.rgb );
 	color.rgb *= CryostasisMagicHDRParams.x;
+
+	#if ( APPROX_SRGB_ADAPTER == 1 )
+	{
+		color.rgb *= color.rgb;
+	}
+	#endif
 
 	return float4( max( color.rgb, 0.0f ), 1.0f );
 }

@@ -428,6 +428,25 @@ float3 CryostasisBakingLabACES( float3 color )
 	return saturate( ( color * ( color + A ) - B ) / ( color * ( C * color + D ) + E ) );
 }
 
+float3 CryostasisApproxLinearToGamma( float3 color )
+{
+	color = max( color, 0.00001f );
+	return color * rsqrt( color );
+}
+
+float3 CryostasisPostRTSample( float3 color )
+{
+	#if ( LINEAR_INPUT == 1 )
+	{
+		return CryostasisApproxLinearToGamma( color );
+	}
+	#else
+	{
+		return color;
+	}
+	#endif
+}
+
 float3 CryostasisAmbientLight( float3 baseColor, float3 sourceBloom, float2 fbTexCoord, float intensity )
 {
 	float3 high = max( sourceBloom, 0.0f );
@@ -500,13 +519,13 @@ float3 CryostasisPandaFX( float3 color, float intensity )
 float3 CryostasisMagicHDR( float3 color, float2 bloomUV, float intensity )
 {
 	float3 bloom = 0.0f;
-	bloom += GetBloomColor( bloomUV ).rgb * 0.0068652342f;
-	bloom += tex2D( CryostasisBloom1Sampler, bloomUV * 0.5f ).rgb * 0.0095942507f;
-	bloom += tex2D( CryostasisBloom2Sampler, bloomUV * 0.25f ).rgb * 0.0123570316f;
-	bloom += tex2D( CryostasisBloom3Sampler, bloomUV * 0.125f ).rgb * 0.0146677885f;
-	bloom += tex2D( CryostasisBloom4Sampler, bloomUV * 0.0625f ).rgb * 0.0160458420f;
-	bloom += tex2D( CryostasisBloom5Sampler, bloomUV * 0.03125f ).rgb * 0.0161773646f;
-	bloom += tex2D( CryostasisBloom6Sampler, bloomUV * 0.015625f ).rgb * 0.0150314343f;
+	bloom += CryostasisPostRTSample( GetBloomColor( bloomUV ).rgb ) * 0.0068652342f;
+	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom1Sampler, bloomUV * 0.5f ).rgb ) * 0.0095942507f;
+	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom2Sampler, bloomUV * 0.25f ).rgb ) * 0.0123570316f;
+	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom3Sampler, bloomUV * 0.125f ).rgb ) * 0.0146677885f;
+	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom4Sampler, bloomUV * 0.0625f ).rgb ) * 0.0160458420f;
+	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom5Sampler, bloomUV * 0.03125f ).rgb ) * 0.0161773646f;
+	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom6Sampler, bloomUV * 0.015625f ).rgb ) * 0.0150314343f;
 
 	float3 hdrColor = CryostasisReinhardInverse( saturate( color ) );
 	float3 merged = lerp( hdrColor, bloom, saturate( CryostasisInternal1.w * intensity ) );
@@ -587,7 +606,7 @@ float4 main( PS_INPUT i ) : COLOR
 	float4 bloomColor = BloomFactor * GetBloomColor( i.baseTexCoord );
 	#if ( CRYOSTASIS_ENABLE == 1 )
 	{
-		outColor.rgb = CryostasisPostProcess( outColor.rgb, bloomColor.rgb, fbTexCoord, i.baseTexCoord );
+		outColor.rgb = CryostasisPostProcess( outColor.rgb, CryostasisPostRTSample( bloomColor.rgb ), fbTexCoord, i.baseTexCoord );
 	}
 	#else
 	{
