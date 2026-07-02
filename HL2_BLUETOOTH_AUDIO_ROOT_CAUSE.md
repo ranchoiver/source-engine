@@ -34,8 +34,8 @@ The old `AudioQueue` backend had three important problems:
    - AudioQueue current-device changes were not treated as route changes that should rebuild output state.
    - A queue that stopped completing buffers could remain half-alive.
 
-3. Immediate stops discarded CoreAudio queue state without resetting Source's submitted-buffer state.
-   - This could leave Source believing buffers were still queued after CoreAudio had thrown them away.
+3. Immediate stops flushed CoreAudio queue state without re-syncing Source's submit cursor.
+   - `AudioQueueStop(..., true)` returns unplayed buffers through their completion callbacks, so the in-flight counts self-corrected, but the submitted-buffer playback clock then included up to ~93 ms of audio that was never heard, and nothing re-aligned the submit cursor with the ring before new buffers went out.
 
 ## Fix
 
@@ -44,9 +44,11 @@ The old `AudioQueue` backend had three important problems:
 - clocks playback from `m_buffersCompleted`, which is advanced by the `AudioQueue` output callback after CoreAudio has taken a buffer;
 - makes `m_buffersCompleted` and `m_bRunning` interlocked because they are updated from AudioQueue callbacks/property listeners;
 - does not advance submitted-buffer state after a failed enqueue;
-- watches AudioQueue current-device changes when the SDK exposes that property;
+- watches AudioQueue current-device changes (registered unconditionally: the property ID is an enum constant, so it cannot be feature-tested with the preprocessor);
 - recovers the `AudioQueue` on invalid queue state, device changes, enqueue/prime/start/stop errors, and a running queue that stops completing buffers;
-- preserves Source's mixed ring buffer during recovery, then resets submitted state to the completed playback point so already-mixed samples can be resubmitted;
+- rate-limits recovery to once per second across all trigger sites, allows at most one rebuild per mix pass from the enqueue path, and uses an escalating stall tolerance (2.5 s doubling to 20 s, reset on progress) so slow Bluetooth route establishment is not torn down mid-setup;
+- preserves Source's mixed ring buffer during recovery, then re-syncs the submit cursor to the completed playback point (the up-to-~93 ms CoreAudio flushed is skipped rather than replayed, keeping the playback clock monotonic);
+- clamps buffer submission to the mixer's painted frontier so ring regions still holding the previous lap's audio are never enqueued, protecting slow mix passes and lowered `snd_mixahead` values;
 - explicitly primes the queue after buffers are enqueued and before playback starts;
 - resets submitted queue state after pause uses `AudioQueueStop(..., true)`.
 
@@ -60,8 +62,10 @@ A deeper macOS modernization should be a separate follow-up PR. That work should
 
 - `scripts/verify-audioqueue-recovery.ps1`
   - verifies that the macOS playback clock uses completed AudioQueue buffers rather than submitted buffers;
-  - verifies enqueue/start/stall recovery paths;
+  - verifies enqueue/start/stall recovery paths, recovery rate limiting, and the painted-frontier submission clamp;
+  - rejects `#ifdef`/`#if defined()` probes of CoreAudio enum constants (always false, silently dead-codes the feature);
   - verifies recovery preserves the mixed ring buffer.
+  - Note: this is a source-shape check, not a compile or runtime test; it exists because this file only compiles on macOS.
 - `py -3 waf configure -T release --build-games=hl2`
 - `py -3 waf build --targets=soundemittersystem,vaudio_minimp3`
 - `py -3 waf build --targets=engine -j1`
