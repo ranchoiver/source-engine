@@ -7,7 +7,7 @@
   - async-audio workaround: `snd_async_fullyasync 1; snd_async_minsize 0; snd_noextraupdate 1`
   - AirPods bug: audio starts stuttering randomly; muting/unmuting the Mac fixes it temporarily.
 - The async-audio workaround reduces blocking sound-file/stream loads and disables extra main-thread mixer updates; it does not address the output device clock or Bluetooth route changes directly.
-- The native macOS path in `engine/audio/snd_win.cpp` uses `AudioQueue` by default (`snd_audioqueue 1`), falling back to OpenAL only with `-snd_openal` or if AudioQueue creation fails.
+- The native macOS path in `engine/audio/snd_win.cpp` uses `AudioQueue` by default; OpenAL is selected only by the `-snd_openal` launch option or if AudioQueue creation fails. (A `snd_audioqueue` convar exists but is never consulted by the selection logic.)
 - The macOS `AudioQueue` backend uses a push queue of 1024-byte buffers and tries to keep about 16 buffers queued. That is roughly 93 ms at 44.1 kHz stereo 16-bit.
 - Potential root cause direction:
   - Bluetooth/CoreAudio devices can pause, restart, and alter callback cadence during route changes.
@@ -29,11 +29,24 @@
   - on invalid/failed queue state,
   - on AudioQueue current-device changes,
   - on enqueue/start/stop errors,
-  - and on a running queue that has queued buffers but no completion progress for more than one second.
-- Guarded the current-device listener with `#ifdef kAudioQueueProperty_CurrentDevice` so newer SDKs get route-change recovery without breaking older SDK builds that do not expose that property.
-- Recovery preserves Source's mixed ring buffer but resets submitted queue state back to the completed playback point. That lets the rebuilt AudioQueue resubmit already-mixed samples instead of skipping ahead or playing from an uninitialized buffer.
+  - and on a running queue that has queued buffers but no completion progress for longer than the stall tolerance.
+- Registered the current-device listener unconditionally. `kAudioQueueProperty_CurrentDevice` is an enum constant, not a macro, so it cannot be feature-tested with `#ifdef` (an earlier revision did exactly that, which always evaluates false and silently compiled the listener out); the property exists in every SDK this engine builds against, and registration failure is nonfatal.
+- Recovery preserves Source's mixed ring buffer and re-syncs the submit cursor to the completed playback point. Because `AudioQueueStop(..., true)` flushes unplayed buffers by firing their completion callbacks, up to the in-flight ~93 ms is skipped rather than replayed; the important property is that the completed-buffer playback clock stays monotonic and the rebuilt queue resumes from valid painted ring data.
 - Recovery resets submitted state again after the old queue is closed, because immediate stop/dispose can still race with completion callbacks.
 - Pause now also resets submitted queue state after `AudioQueueStop(..., true)`, because immediate stop discards pending CoreAudio buffers.
 - Restart paths now call `AudioQueuePrime` after buffers are enqueued and before `AudioQueueStart`, so route recovery explicitly re-primes CoreAudio instead of relying on stale queue state.
 - Kept `snd_mixahead`, `snd_async_fullyasync`, `snd_async_minsize`, and `snd_noextraupdate` defaults unchanged. Those are workarounds for different symptoms and should not be the permanent fix for Bluetooth output recovery.
 - Broader modernization should be macOS-only in a follow-up PR, likely evaluating AUHAL/Audio Units or AVAudioEngine plus a callback-fed ring buffer, route-property tracking, underrun counters, and drift policy.
+
+## 2026-07-02 review fixes
+
+A full review of the backend produced these hardening changes:
+
+- Removed the `#ifdef kAudioQueueProperty_CurrentDevice` guards: the property ID is an enum constant, so the guard was always false and the route-change listener (the headline recovery trigger) never compiled in. The listener is now registered unconditionally.
+- Clamped buffer submission to the mixer's painted frontier (`PaintedAheadFrames()`). With the playback clock now derived from completed buffers, the old fixed 16-buffer refill left only ~7 ms between the enqueue frontier and the painted frontier; a slow mix pass or a lowered `snd_mixahead` would enqueue ring regions still holding the previous lap's audio (~0.74 s old). The clamp is computed from pure deltas (`g_paintedtime - g_soundtime`, re-based onto the live completion count via the snapshot taken in `GetOutputPosition`), so it survives the engine's `g_paintedtime` rebases.
+- Rate-limited recovery with a 1 s cooldown shared by all trigger sites, and limited enqueue-failure recovery to one rebuild per `PaintEnd`; the previous code could loop teardown/rebuild of a 128-buffer queue on the main thread indefinitely.
+- Raised the stall tolerance to 2.5 s with exponential backoff to 20 s while recoveries stay unproductive (reset on real progress). AirPods route establishment can take 1-2 s during which a started queue legitimately completes nothing; a 1 s hair-trigger tears the route down mid-setup and can thrash.
+- A declined device-change recovery (paused or on cooldown) now re-arms the change flag instead of dropping it.
+- Fixed uninitialized `ioDataSize` passed to `AudioQueueGetProperty` in the IsRunning listener (must be `sizeof(running)` on input); with stack garbage the call could fail nondeterministically and leave `m_bRunning` stale.
+- Added a third submit-cursor re-sync after the queue rebuild in `RecoverWaveOut`, closing the window where a late flush callback could leave `sent < completed`.
+- Removed the dead prime/start block in `UnPause` (`Pause` re-syncs the cursors, so the queued count is always zero there; `PaintEnd` performs the actual restart).
