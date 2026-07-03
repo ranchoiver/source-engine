@@ -13,9 +13,9 @@ $scratch = Join-Path $repoRoot '.deps\hl2_flashlight_vcs'
 
 if ( !$OutputPath )
 {
-	# Default to the repo's shipped-shader location so the fixed bytecode is
-	# a deliverable, not a build byproduct.
-	$OutputPath = Join-Path $repoRoot 'materialsystem\stdshaders\shaders\fxc\worldtwotextureblend_ps20b.vcs'
+	# Ship in the game content tree so "copy game/hl2 over the HL2 dir"
+	# installs it; the fixed bytecode is a deliverable, not a build byproduct.
+	$OutputPath = Join-Path $repoRoot 'game\hl2\shaders\fxc\worldtwotextureblend_ps20b.vcs'
 }
 if ( !( [System.IO.Path]::IsPathRooted( $OutputPath ) ) )
 {
