@@ -210,6 +210,7 @@ END_SHADER_PARAMS
 			if( hasFlashlight )
 			{
 				pShaderShadow->EnableTexture( SHADER_SAMPLER2, true );
+				pShaderShadow->EnableTexture( SHADER_SAMPLER6, true );
 				pShaderShadow->EnableTexture( SHADER_SAMPLER7, true );
 				pShaderShadow->SetShadowDepthFiltering( SHADER_SAMPLER7 );
 				flags |= VERTEX_TANGENT_S | VERTEX_TANGENT_T | VERTEX_NORMAL;
@@ -226,9 +227,6 @@ END_SHADER_PARAMS
 			{
 				flags |= VERTEX_COLOR;
 			}
-
-			// Normalizing cube map
-			pShaderShadow->EnableTexture( SHADER_SAMPLER6, true );
 
 			// texcoord0 : base texcoord
 			// texcoord1 : lightmap texcoord
@@ -326,15 +324,16 @@ END_SHADER_PARAMS
 				VMatrix worldToTexture;
 				ITexture *pFlashlightDepthTexture;
 				FlashlightState_t state = pShaderAPI->GetFlashlightStateEx( worldToTexture, &pFlashlightDepthTexture );
-				bFlashlightShadows = state.m_bEnableShadows && ( pFlashlightDepthTexture != NULL );
+				bFlashlightShadows = state.m_bEnableShadows && ( pFlashlightDepthTexture != NULL ) && g_pConfig->ShadowDepthTexture();
 
 				SetFlashLightColorFromState( state, pShaderAPI );
 
 				BindTexture( SHADER_SAMPLER2, state.m_pSpotlightTexture, state.m_nSpotlightTextureFrame );
 
-				if( pFlashlightDepthTexture && g_pConfig->ShadowDepthTexture() )
+				if( bFlashlightShadows )
 				{
 					BindTexture( SHADER_SAMPLER7, pFlashlightDepthTexture );
+					pShaderAPI->BindStandardTexture( SHADER_SAMPLER6, TEXTURE_SHADOW_NOISE_2D );
 				}
 			}
 			if( hasDetailTexture )
@@ -352,7 +351,8 @@ END_SHADER_PARAMS
 					pShaderAPI->BindStandardTexture( SHADER_SAMPLER4, TEXTURE_NORMALMAP_FLAT );
 				}
 			}
-			pShaderAPI->BindStandardTexture( SHADER_SAMPLER6, TEXTURE_NORMALIZATION_CUBEMAP_SIGNED );
+			// No bind for sampler 6 without shadows: RandomRotationSampler is
+			// only read inside the FLASHLIGHTSHADOWS=1 combos.
 
 			// If we don't have a texture transform, we don't have
 			// to set vertex shader constants or run vertex shader instructions

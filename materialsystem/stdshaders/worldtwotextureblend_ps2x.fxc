@@ -60,7 +60,8 @@ sampler LightmapSampler				: register( s1 );
 sampler FlashlightSampler			: register( s2 );
 sampler DetailSampler				: register( s3 );
 sampler BumpmapSampler				: register( s4 );
-sampler NormalizeSampler			: register( s6 );
+sampler RandomRotationSampler		: register( s6 );
+sampler FlashlightDepthSampler		: register( s7 );
 
 struct PS_INPUT
 {
@@ -169,7 +170,7 @@ float4 main( PS_INPUT i ) : COLOR
 
 		diffuseLighting = DoFlashlight( g_FlashlightPos, i.worldPos_projPosZ.xyz, flashlightSpacePosition,
 			worldSpaceNormal, g_FlashlightAttenuationFactors.xyz, 
-			g_FlashlightAttenuationFactors.w, FlashlightSampler, FlashlightSampler, NormalizeSampler,
+			g_FlashlightAttenuationFactors.w, FlashlightSampler, FlashlightDepthSampler, RandomRotationSampler,
 			nShadowSampleLevel,	bDoShadows, false, float2(0, 0), false );
 	}
 	else
