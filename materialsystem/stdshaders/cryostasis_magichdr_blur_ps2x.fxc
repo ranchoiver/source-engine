@@ -1,0 +1,53 @@
+// STATIC: "APPROX_SRGB_ADAPTER"	"0..1" [ps20b] [PC]
+
+#define HDRTYPE HDR_TYPE_NONE
+#include "common_ps_fxc.h"
+
+#ifndef APPROX_SRGB_ADAPTER
+#define APPROX_SRGB_ADAPTER 0
+#endif
+
+sampler BaseTextureSampler : register( s0 );
+
+float4 CryostasisBlurParams : register( c0 ); // xy blur texel step, zw source active-region scale
+
+struct PS_INPUT
+{
+	float2 baseTexCoord : TEXCOORD0;
+};
+
+float4 CryostasisSampleTexture( sampler texSampler, float2 uv )
+{
+	float4 color = tex2D( texSampler, uv );
+
+	#if ( APPROX_SRGB_ADAPTER == 1 )
+	{
+		color.rgb = max( color.rgb, 0.00001f );
+		color.rgb *= rsqrt( color.rgb );
+	}
+	#endif
+
+	return color;
+}
+
+float4 main( PS_INPUT i ) : COLOR
+{
+	float2 uv = i.baseTexCoord * CryostasisBlurParams.zw;
+	float2 stepUV = CryostasisBlurParams.xy;
+
+	float4 color = CryostasisSampleTexture( BaseTextureSampler, uv ) * 0.2213510889f;
+	color += ( CryostasisSampleTexture( BaseTextureSampler, uv + stepUV * 1.0f ) + CryostasisSampleTexture( BaseTextureSampler, uv - stepUV * 1.0f ) ) * 0.1897872911f;
+	color += ( CryostasisSampleTexture( BaseTextureSampler, uv + stepUV * 2.0f ) + CryostasisSampleTexture( BaseTextureSampler, uv - stepUV * 2.0f ) ) * 0.1196254322f;
+	color += ( CryostasisSampleTexture( BaseTextureSampler, uv + stepUV * 3.0f ) + CryostasisSampleTexture( BaseTextureSampler, uv - stepUV * 3.0f ) ) * 0.0554307611f;
+	color += ( CryostasisSampleTexture( BaseTextureSampler, uv + stepUV * 4.0f ) + CryostasisSampleTexture( BaseTextureSampler, uv - stepUV * 4.0f ) ) * 0.0188820478f;
+	color += ( CryostasisSampleTexture( BaseTextureSampler, uv + stepUV * 5.0f ) + CryostasisSampleTexture( BaseTextureSampler, uv - stepUV * 5.0f ) ) * 0.0047284442f;
+	color += ( CryostasisSampleTexture( BaseTextureSampler, uv + stepUV * 6.0f ) + CryostasisSampleTexture( BaseTextureSampler, uv - stepUV * 6.0f ) ) * 0.0008704792f;
+
+	#if ( APPROX_SRGB_ADAPTER == 1 )
+	{
+		color.rgb *= color.rgb;
+	}
+	#endif
+
+	return max( color, 0.0f );
+}

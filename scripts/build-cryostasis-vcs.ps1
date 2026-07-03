@@ -364,11 +364,52 @@ $outputPath = Join-Path $OutputDir 'engine_post_ps20b.vcs'
 Write-Vcs $outputPath $totalCombos $dynamicCombos 0 $staticPayloads
 Test-Vcs $outputPath $totalCombos $dynamicCombos 0 $expectedCombos
 
+Write-Host "Wrote $outputPath"
+Write-Host "Compiled dynamic combos: $compiledCombos across $staticCombos static combos"
+
+# ---------------------------------------------------------------------------
+# cryostasis_magichdr_inverse_ps20b / cryostasis_magichdr_blur_ps20b:
+# 2 static combos each (APPROX_SRGB_ADAPTER 0..1), 1 dynamic combo,
+# mirroring their fxctmp9 .inc index math. The adapter combo is compiled for
+# completeness but the runtime always selects 0 (the chain uses float16 RTs).
+# ---------------------------------------------------------------------------
+
+$magicHdrShaders = @(
+	@{ Source = 'cryostasis_magichdr_inverse_ps2x.fxc'; Output = 'cryostasis_magichdr_inverse_ps20b.vcs' },
+	@{ Source = 'cryostasis_magichdr_blur_ps2x.fxc'; Output = 'cryostasis_magichdr_blur_ps20b.vcs' }
+)
+
+foreach ( $shader in $magicHdrShaders )
+{
+	$staticPayloads = @{}
+	$expectedCombos = New-Object 'System.Collections.Generic.HashSet[string]'
+
+	Push-Location $shaderDir
+	try
+	{
+		for ( $staticId = 0; $staticId -lt 2; ++$staticId )
+		{
+			$defines = @{ APPROX_SRGB_ADAPTER = $staticId }
+			$bytecodes = New-Object 'byte[][]' 1
+			$bytecodes[0] = Compile-Combo $shader.Source $defines "$($shader.Source) static=$staticId"
+			[void]$expectedCombos.Add( "$staticId/0" )
+			$staticPayloads[$staticId] = New-StaticComboChunks $bytecodes
+		}
+	}
+	finally
+	{
+		Pop-Location
+	}
+
+	$outputPath = Join-Path $OutputDir $shader.Output
+	Write-Vcs $outputPath 2 1 0 $staticPayloads
+	Test-Vcs $outputPath 2 1 0 $expectedCombos
+	Write-Host "Wrote $outputPath"
+}
+
 if ( !$KeepWork )
 {
 	Remove-Item -LiteralPath $workBin -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "Wrote $outputPath"
-Write-Host "Compiled dynamic combos: $compiledCombos across $staticCombos static combos"
 Write-Host "Validated generated VCS structure and combo coverage."
