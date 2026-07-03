@@ -23,6 +23,12 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 		SHADER_PARAM( AAINTERNAL2,				SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal anti-aliasing values set via material proxy" )
 		SHADER_PARAM( AAINTERNAL3,				SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal anti-aliasing values set via material proxy" )
 		SHADER_PARAM( BLOOMENABLE,				SHADER_PARAM_TYPE_BOOL,		"1",				"Enable bloom" )
+		SHADER_PARAM( CRYOSTASISENABLE,			SHADER_PARAM_TYPE_BOOL,		"0",				"Enable HL2 Cryostasis ReShade post-processing" )
+		SHADER_PARAM( CRYOSTASISINTERNAL1,		SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal Cryostasis values set via material proxy" )
+		SHADER_PARAM( CRYOSTASISINTERNAL2,		SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal Cryostasis values set via material proxy" )
+		SHADER_PARAM( CRYOSTASISINTERNAL3,		SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal Cryostasis values set via material proxy" )
+		SHADER_PARAM( CRYOSTASISINTERNAL4,		SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal Cryostasis values set via material proxy" )
+		SHADER_PARAM( CRYOSTASISINTERNAL5,		SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal Cryostasis values set via material proxy" )
 	END_SHADER_PARAMS
 
 	SHADER_INIT_PARAMS()
@@ -46,6 +52,30 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 		if( !params[ BLOOMENABLE ]->IsDefined() )
 		{
 			params[ BLOOMENABLE ]->SetIntValue( 1 );
+		}
+		if( !params[ CRYOSTASISENABLE ]->IsDefined() )
+		{
+			params[ CRYOSTASISENABLE ]->SetIntValue( 0 );
+		}
+		if( !params[ CRYOSTASISINTERNAL1 ]->IsDefined() )
+		{
+			params[ CRYOSTASISINTERNAL1 ]->SetVecValue( 0, 0, 0, 0 );
+		}
+		if( !params[ CRYOSTASISINTERNAL2 ]->IsDefined() )
+		{
+			params[ CRYOSTASISINTERNAL2 ]->SetVecValue( 0, 0, 0, 0 );
+		}
+		if( !params[ CRYOSTASISINTERNAL3 ]->IsDefined() )
+		{
+			params[ CRYOSTASISINTERNAL3 ]->SetVecValue( 0, 0, 0, 0 );
+		}
+		if( !params[ CRYOSTASISINTERNAL4 ]->IsDefined() )
+		{
+			params[ CRYOSTASISINTERNAL4 ]->SetVecValue( 0, 0, 0, 0 );
+		}
+		if( !params[ CRYOSTASISINTERNAL5 ]->IsDefined() )
+		{
+			params[ CRYOSTASISINTERNAL5 ]->SetVecValue( 0, 0, 0, 0 );
 		}
 		SET_FLAGS2( MATERIAL_VAR2_NEEDS_FULL_FRAME_BUFFER_TEXTURE );
 	}
@@ -112,6 +142,10 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER3, false );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER4, false );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER5, false );
+
+			// Full-frame scene depth for the Cryostasis Emphasize pass.
+			pShaderShadow->EnableTexture(  SHADER_SAMPLER6, true );
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER6, false );
 
 			int		format				= VERTEX_POSITION;
 			int		numTexCoords		= 1;
@@ -188,10 +222,24 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 //			int aaDebugMode					= (int)params[ AAINTERNAL1      ]->GetVecValue()[3];
 			int bloomEnabled				=    ( params[ BLOOMENABLE      ]->GetIntValue()    == 0    ) ? 0 : 1;
 			int colCorrectEnabled			=    ccInfo.m_bIsEnabled;
+			int cryostasisEnabled			=    ( params[ CRYOSTASISENABLE ]->GetIntValue()    == 0    ) ? 0 : 1;
+			cryostasisEnabled				= cryostasisEnabled && ( g_pHardwareConfig->SupportsPixelShaders_2_b() || g_pHardwareConfig->ShouldAlwaysUseShaderModel2bShaders() );
 
 			float flBloomFactor = bloomEnabled ? 1.0f : 0.0f;
 			float bloomConstant[4] = { flBloomFactor, flBloomFactor, flBloomFactor, flBloomFactor };
 			pShaderAPI->SetPixelShaderConstant( 5, bloomConstant );
+
+			// c6-c10 and the depth texture are only read by CRYOSTASIS_ENABLE=1
+			// combos; skip the uploads entirely on the vanilla path.
+			if ( cryostasisEnabled )
+			{
+				pShaderAPI->SetPixelShaderConstant( 6, params[ CRYOSTASISINTERNAL1 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 7, params[ CRYOSTASISINTERNAL2 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 8, params[ CRYOSTASISINTERNAL3 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 9, params[ CRYOSTASISINTERNAL4 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 10, params[ CRYOSTASISINTERNAL5 ]->GetVecValue(), 1 );
+				pShaderAPI->BindStandardTexture( SHADER_SAMPLER6, TEXTURE_FRAME_BUFFER_FULL_DEPTH );
+			}
 
 			if ( !colCorrectEnabled )
 			{
@@ -206,6 +254,7 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 				SET_DYNAMIC_PIXEL_SHADER_COMBO( AA_REDUCE_ONE_PIXEL_LINE_BLUR,	aaReduceOnePixelLineBlur );
 //				SET_DYNAMIC_PIXEL_SHADER_COMBO( AA_DEBUG_MODE,					aaDebugMode );
 				SET_DYNAMIC_PIXEL_SHADER_COMBO( COL_CORRECT_NUM_LOOKUPS,		colCorrectNumLookups );
+				SET_DYNAMIC_PIXEL_SHADER_COMBO( CRYOSTASIS_ENABLE,				cryostasisEnabled );
 				SET_DYNAMIC_PIXEL_SHADER( engine_post_ps20b );
 			}
 			else
@@ -216,6 +265,7 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 				SET_DYNAMIC_PIXEL_SHADER_COMBO( AA_REDUCE_ONE_PIXEL_LINE_BLUR,	0 );
 //				SET_DYNAMIC_PIXEL_SHADER_COMBO( AA_DEBUG_MODE,					aaDebugMode );
 				SET_DYNAMIC_PIXEL_SHADER_COMBO( COL_CORRECT_NUM_LOOKUPS,		colCorrectNumLookups );
+				SET_DYNAMIC_PIXEL_SHADER_COMBO( CRYOSTASIS_ENABLE,				0 );
 				SET_DYNAMIC_PIXEL_SHADER( engine_post_ps20 );
 			}
 

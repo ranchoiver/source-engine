@@ -101,6 +101,27 @@ public:
 		m_bCOL_CORRECT_NUM_LOOKUPS = true;
 #endif
 	}
+private:
+	int m_nCRYOSTASIS_ENABLE;
+#ifdef _DEBUG
+	bool m_bCRYOSTASIS_ENABLE;
+#endif
+public:
+	void SetCRYOSTASIS_ENABLE( int i )
+	{
+		Assert( i >= 0 && i <= 0 );
+		m_nCRYOSTASIS_ENABLE = i;
+#ifdef _DEBUG
+		m_bCRYOSTASIS_ENABLE = true;
+#endif
+	}
+	void SetCRYOSTASIS_ENABLE( bool i )
+	{
+		m_nCRYOSTASIS_ENABLE = i ? 1 : 0;
+#ifdef _DEBUG
+		m_bCRYOSTASIS_ENABLE = true;
+#endif
+	}
 public:
 	engine_post_ps20_Dynamic_Index()
 	{
@@ -120,16 +141,20 @@ public:
 		m_bCOL_CORRECT_NUM_LOOKUPS = false;
 #endif // _DEBUG
 		m_nCOL_CORRECT_NUM_LOOKUPS = 0;
+#ifdef _DEBUG
+		m_bCRYOSTASIS_ENABLE = false;
+#endif // _DEBUG
+		m_nCRYOSTASIS_ENABLE = 0;
 	}
 	int GetIndex()
 	{
 		// Asserts to make sure that we aren't using any skipped combinations.
 		// Asserts to make sure that we are setting all of the combination vars.
 #ifdef _DEBUG
-		bool bAllDynamicVarsDefined = m_bAA_ENABLE && m_bAA_QUALITY_MODE && m_bAA_REDUCE_ONE_PIXEL_LINE_BLUR && m_bCOL_CORRECT_NUM_LOOKUPS;
+		bool bAllDynamicVarsDefined = m_bAA_ENABLE && m_bAA_QUALITY_MODE && m_bAA_REDUCE_ONE_PIXEL_LINE_BLUR && m_bCOL_CORRECT_NUM_LOOKUPS && m_bCRYOSTASIS_ENABLE;
 		Assert( bAllDynamicVarsDefined );
 #endif // _DEBUG
-		return ( 1 * m_nAA_ENABLE ) + ( 2 * m_nAA_QUALITY_MODE ) + ( 2 * m_nAA_REDUCE_ONE_PIXEL_LINE_BLUR ) + ( 2 * m_nCOL_CORRECT_NUM_LOOKUPS ) + 0;
+		return ( 1 * m_nAA_ENABLE ) + ( 2 * m_nAA_QUALITY_MODE ) + ( 2 * m_nAA_REDUCE_ONE_PIXEL_LINE_BLUR ) + ( 2 * m_nCOL_CORRECT_NUM_LOOKUPS ) + ( 10 * m_nCRYOSTASIS_ENABLE ) + 0;
 	}
 };
-#define shaderDynamicTest_engine_post_ps20 psh_forgot_to_set_dynamic_AA_ENABLE + psh_forgot_to_set_dynamic_AA_QUALITY_MODE + psh_forgot_to_set_dynamic_AA_REDUCE_ONE_PIXEL_LINE_BLUR + psh_forgot_to_set_dynamic_COL_CORRECT_NUM_LOOKUPS + 0
+#define shaderDynamicTest_engine_post_ps20 psh_forgot_to_set_dynamic_AA_ENABLE + psh_forgot_to_set_dynamic_AA_QUALITY_MODE + psh_forgot_to_set_dynamic_AA_REDUCE_ONE_PIXEL_LINE_BLUR + psh_forgot_to_set_dynamic_COL_CORRECT_NUM_LOOKUPS + psh_forgot_to_set_dynamic_CRYOSTASIS_ENABLE + 0
