@@ -38,6 +38,17 @@
 - Kept `snd_mixahead`, `snd_async_fullyasync`, `snd_async_minsize`, and `snd_noextraupdate` defaults unchanged. Those are workarounds for different symptoms and should not be the permanent fix for Bluetooth output recovery.
 - Broader modernization should be macOS-only in a follow-up PR, likely evaluating AUHAL/Audio Units or AVAudioEngine plus a callback-fed ring buffer, route-property tracking, underrun counters, and drift policy.
 
+## 2026-06-26 macOS modernization PR
+
+- Rebased `codex/modernize-macos-audio-stack` on top of PR #2 (`codex/fix-hl2-bluetooth-audio-stutter`) after the user asked for the modernization PR to build on the focused Bluetooth fix.
+- Chose Audio Unit HAL output (`kAudioUnitSubType_HALOutput`) as the default modern macOS backend because it matches Apple's hardware I/O model and lets CoreAudio pull exactly the frames it needs.
+- Kept the existing AudioQueue backend as a fallback instead of deleting it. PR #2 already hardens that path, and a fallback is useful for older systems or unexpected AUHAL setup failures.
+- Added `snd_macaudiounit` as a default-on macOS cvar and `-snd_audioqueue` as a command-line escape hatch for the legacy AudioQueue path.
+- The Audio Unit render callback only copies from the pre-mixed Source ring, emits silence for underruns, increments counters, and advances the rendered-frame clock. It does not allocate, call mixer code, restart devices, or mutate CoreAudio properties.
+- CoreAudio default-output, sample-rate, buffer-size, and device-alive listeners only mark a route/device generation. The game thread performs recovery from `PaintBegin()`/`PaintEnd()`.
+- Added AudioUnit framework linkage to Waf; VPC already linked the framework, and now also includes the new backend source/header.
+- Added a guarded `kAudioHardwarePropertyPowerHint` / `kAudioHardwarePowerHintNone` request for the AudioUnit backend. This is nonfatal and SDK-compatible, but prevents macOS from selecting the power-saving audio policy that Apple documents can expand the default I/O buffer from 512 to 4096 frames.
+
 ## 2026-07-02 review fixes
 
 A full review of the backend produced these hardening changes:
@@ -50,3 +61,16 @@ A full review of the backend produced these hardening changes:
 - Fixed uninitialized `ioDataSize` passed to `AudioQueueGetProperty` in the IsRunning listener (must be `sizeof(running)` on input); with stack garbage the call could fail nondeterministically and leave `m_bRunning` stale.
 - Added a third submit-cursor re-sync after the queue rebuild in `RecoverWaveOut`, closing the window where a late flush callback could leave `sent < completed`.
 - Removed the dead prime/start block in `UnPause` (`Pause` re-syncs the cursors, so the queued count is always zero there; `PaintEnd` performs the actual restart).
+
+## 2026-07-03 AudioUnit review fixes
+
+A full review of the AudioUnit backend produced these fixes:
+
+- Fixed `kAudioDevicePropertyScopeGlobal` (does not exist in any Apple SDK) to `kAudioObjectPropertyScopeGlobal` in the buffer-size listener address. This was a hard compile error that would have broken the entire macOS engine build, fallback paths included.
+- Replaced `#if defined( kAudioHardwarePropertyPowerHint )` (always false - enum constants are invisible to the preprocessor, so the whole power-hint feature was compiled out) with an SDK version gate, and did the same for the `kAudioObjectPropertyElementMain` compatibility define. Documented that the TN2321 power-saving policy is normally opt-in via Info.plist, so the request is defensive.
+- Added a barrier-published ring write cursor (`m_writtenFrames`): `TransferSamples` publishes it with `ThreadInterlockedExchangeAdd` after `S_TransferStereo16`, and the render callback reads it the same way instead of touching `g_paintedtime` directly. Plain int reads of a global the mixer writes concurrently were a data race, and on weakly-ordered Apple Silicon the callback could observe the new cursor before the ring bytes and copy a stale lap.
+- Made the render clock update a single monotonic store (`m_renderedFrames = startFrame + requestedFrames`). The old resync path stored a backward value first and re-advanced it, and `GetSoundTime()` interprets any decrease as a full ring wrap - a spurious +0.74 s jump of `g_soundtime`. Transient stalls now emit silence while moving forward; only a beyond-one-lap divergence (engine timeline rebase) snaps the clock. The same forward-only rule now guards `StopAllSounds`.
+- Clamped the start threshold to the `snd_mixahead` prefill budget. The mixer can never mix more than `snd_mixahead * 44100` frames ahead, so a threshold above that (4096-frame power-save device buffers, or a lowered `snd_mixahead`) meant the unit never started: permanent silence with no failure flag.
+- Sized `MaximumFramesPerSlice` to cover the device's actual I/O buffer instead of capping at 4096; an oversized render slice fails with `kAudioUnitErr_TooManyFramesToProcess` and the callback never runs.
+- Rate-limited `RecoverAudioUnit` to once per second and made `ServiceDeviceChanges` acknowledge only the device-change generation observed before the rebuild, so a change landing mid-recovery still triggers another pass.
+- Extended the verifier accordingly, including rejecting `#ifdef` probes of CoreAudio enum constants and requiring the barrier-published cursor.

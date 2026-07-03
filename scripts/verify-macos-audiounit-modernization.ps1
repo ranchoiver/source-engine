@@ -1,0 +1,121 @@
+$ErrorActionPreference = 'Stop'
+
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+$audioUnitPath = Join-Path $repoRoot 'engine/audio/snd_dev_mac_audiounit.cpp'
+$audioUnitHeaderPath = Join-Path $repoRoot 'engine/audio/snd_dev_mac_audiounit.h'
+$sndWinPath = Join-Path $repoRoot 'engine/audio/snd_win.cpp'
+$engineWscriptPath = Join-Path $repoRoot 'engine/wscript'
+$rootWscriptPath = Join-Path $repoRoot 'wscript'
+$engineVpcPath = Join-Path $repoRoot 'engine/engine.vpc'
+
+$audioUnit = Get-Content -Raw -LiteralPath $audioUnitPath
+$audioUnitHeader = Get-Content -Raw -LiteralPath $audioUnitHeaderPath
+$sndWin = Get-Content -Raw -LiteralPath $sndWinPath
+$engineWscript = Get-Content -Raw -LiteralPath $engineWscriptPath
+$rootWscript = Get-Content -Raw -LiteralPath $rootWscriptPath
+$engineVpc = Get-Content -Raw -LiteralPath $engineVpcPath
+
+function Assert-TextMatch {
+    param(
+        [string]$Text,
+        [string]$Pattern,
+        [string]$Message
+    )
+
+    if ($Text -notmatch $Pattern) {
+        throw $Message
+    }
+}
+
+Assert-TextMatch $audioUnitHeader 'Audio_CreateMacAudioUnitDevice' 'AudioUnit backend must expose a factory.'
+Assert-TextMatch $audioUnit '#include\s+<AudioUnit/AudioUnit\.h>' 'AudioUnit backend must use AudioUnit APIs.'
+Assert-TextMatch $audioUnit '#include\s+<CoreAudio/CoreAudio\.h>' 'AudioUnit backend must use CoreAudio device APIs.'
+Assert-TextMatch $audioUnit 'kAudioUnitSubType_HALOutput' 'Modern macOS output must use the HAL output AudioUnit.'
+Assert-TextMatch $audioUnit 'AudioComponentFindNext' 'Backend should use AudioComponent APIs, not old Component APIs.'
+Assert-TextMatch $audioUnit 'AudioComponentInstanceNew' 'Backend should instantiate an AudioUnit component.'
+Assert-TextMatch $audioUnit 'kAudioUnitProperty_SetRenderCallback' 'AudioUnit output must be callback-driven.'
+Assert-TextMatch $audioUnit 'AudioOutputUnitStart' 'AudioUnit backend must start output through AudioOutputUnitStart.'
+Assert-TextMatch $audioUnit 'kAudioHardwarePropertyDefaultOutputDevice' 'Backend must track the default output device.'
+Assert-TextMatch $audioUnit 'kAudioDevicePropertyNominalSampleRate' 'Backend must watch device sample-rate changes.'
+Assert-TextMatch $audioUnit 'kAudioDevicePropertyBufferFrameSize' 'Backend must watch hardware buffer-size changes.'
+Assert-TextMatch $audioUnit 'kAudioDevicePropertyDeviceIsAlive' 'Backend must watch device liveness changes.'
+Assert-TextMatch $audioUnit 'AudioObjectAddPropertyListener' 'Backend must install CoreAudio property listeners.'
+Assert-TextMatch $audioUnit 'kAudioHardwarePropertyPowerHint' 'Backend should opt out of CoreAudio power-saving latency inflation when supported.'
+Assert-TextMatch $audioUnit 'kAudioHardwarePowerHintNone' 'Backend should prefer low-latency CoreAudio power policy.'
+Assert-TextMatch $audioUnit 'AudioObjectSetPropertyData\(\s*kAudioObjectSystemObject' 'Power hint must be applied through CoreAudio system object properties.'
+Assert-TextMatch $audioUnit 'RecoverAudioUnit\(\s*"CoreAudio device change"' 'Device changes must recover on the game thread.'
+Assert-TextMatch $audioUnit 'm_underrunCount\+\+' 'Underruns must be counted.'
+Assert-TextMatch $audioUnit 'SilenceOutput' 'Underruns and unsupported callback layouts must emit silence.'
+Assert-TextMatch $audioUnit 'S_TransferStereo16\(\s*m_sndBuffers' 'Backend must preserve Source mixer ring semantics.'
+Assert-TextMatch $audioUnit 'GetOutputPosition[\s\S]*m_renderedFrames' 'Playback clock must use frames rendered by the AudioUnit callback.'
+Assert-TextMatch $audioUnit 'FramesAvailableForHardware\(\)\s*>=\s*StartThresholdFrames\(\)' 'AudioUnit should wait for prefilled audio before starting.'
+Assert-TextMatch $audioUnit 'StartThresholdFrames[\s\S]{0,700}snd_mixahead' 'Start threshold must be clamped to the snd_mixahead prefill budget or the unit can never start.'
+Assert-TextMatch $audioUnit 'ThreadInterlockedExchangeAdd\(\s*&m_writtenFrames,\s*end\s*-\s*m_writtenFrames\s*\)' 'Ring write cursor must be published with a full barrier after S_TransferStereo16.'
+Assert-TextMatch $audioUnit 'ThreadInterlockedExchangeAdd\(\s*&m_writtenFrames,\s*0\s*\)' 'Render callback must read the write cursor with a full barrier, never g_paintedtime directly.'
+
+# CoreAudio property IDs and enum constants are not macros: #ifdef/#if defined()
+# on them is always false and silently compiles the guarded feature out.
+if ($audioUnit -match '#\s*if(def\s+|\s+defined\s*\(\s*)kAudio') {
+    throw 'CoreAudio enum constants must not be probed with #ifdef/#if defined() - gate on SDK version macros instead.'
+}
+
+$renderMatch = [regex]::Match(
+    $audioUnit,
+    'OSStatus\s+CAudioDeviceMacAudioUnit::RenderAudio\s*\([^\)]*\)\s*\{(?<body>.*?)^\}',
+    [System.Text.RegularExpressions.RegexOptions]::Singleline -bor [System.Text.RegularExpressions.RegexOptions]::Multiline
+)
+
+if (!$renderMatch.Success) {
+    throw 'Could not find CAudioDeviceMacAudioUnit::RenderAudio.'
+}
+
+$renderBody = $renderMatch.Groups['body'].Value
+if ($renderBody -match 'Audio(OutputUnit(Start|Stop)|Unit(Uninitialize|Initialize|SetProperty)|ComponentInstance(New|Dispose)|Object(Add|Remove)PropertyListener)') {
+    throw 'AudioUnit render callback must not perform device lifecycle, property, or listener work.'
+}
+
+if ($renderBody -notmatch 'm_renderedFrames\s*=\s*startFrame\s*\+\s*requestedFrames') {
+    throw 'Render callback must advance the rendered frame clock with a single monotonic store.'
+}
+
+if ($renderBody -match 'g_paintedtime') {
+    throw 'Render callback must not read g_paintedtime directly; use the barrier-published write cursor.'
+}
+
+if ($renderBody -notmatch 'CopyFromMixRing') {
+    throw 'Render callback must copy from the pre-mixed Source ring.'
+}
+
+$openMatch = [regex]::Match(
+    $audioUnit,
+    'bool\s+CAudioDeviceMacAudioUnit::OpenAudioUnit\s*\(\s*void\s*\)\s*\{(?<body>.*?)^\}',
+    [System.Text.RegularExpressions.RegexOptions]::Singleline -bor [System.Text.RegularExpressions.RegexOptions]::Multiline
+)
+
+if (!$openMatch.Success) {
+    throw 'Could not find CAudioDeviceMacAudioUnit::OpenAudioUnit.'
+}
+
+$openBody = $openMatch.Groups['body'].Value
+$powerPolicyPos = $openBody.IndexOf('PreferLowLatencyCoreAudioPowerPolicy();')
+$defaultDevicePos = $openBody.IndexOf('GetDefaultOutputDevice')
+if ($powerPolicyPos -lt 0 -or $defaultDevicePos -lt 0 -or $powerPolicyPos -gt $defaultDevicePos) {
+    throw 'Power policy should be applied before opening the active device.'
+}
+
+$audioUnitPos = $sndWin.IndexOf('Audio_CreateMacAudioUnitDevice')
+$audioQueuePos = $sndWin.IndexOf('Audio_CreateMacAudioQueueDevice')
+if ($audioUnitPos -lt 0 -or $audioQueuePos -lt 0 -or $audioUnitPos -gt $audioQueuePos) {
+    throw 'macOS runtime selection must try AudioUnit before AudioQueue fallback.'
+}
+
+Assert-TextMatch $sndWin 'snd_macaudiounit' 'macOS AudioUnit default must be controllable by cvar.'
+Assert-TextMatch $sndWin 'CheckParm\(\s*"-snd_audioqueue"\s*\)' 'Users must be able to force AudioQueue fallback.'
+Assert-TextMatch $engineWscript 'audio/snd_dev_mac_audiounit\.cpp' 'Waf must compile the AudioUnit backend on Darwin.'
+Assert-TextMatch $engineWscript "'AUDIOUNIT'" 'Engine Waf target must link the AudioUnit framework.'
+Assert-TextMatch $rootWscript 'FRAMEWORK_AUDIOUNIT\s*=\s*"AudioUnit"' 'Root Waf configure must define the AudioUnit framework.'
+Assert-TextMatch $engineVpc 'snd_dev_mac_audiounit\.cpp' 'VPC must include the AudioUnit backend source on macOS.'
+Assert-TextMatch $engineVpc '\$SystemFrameworks[^\r\n]*AudioUnit' 'VPC must link the AudioUnit framework.'
+
+Write-Host 'Verified macOS AudioUnit modernization invariants.'
+Write-Host 'AudioUnit is default before AudioQueue fallback; render callback is pull-based, route-aware, and real-time safe.'
