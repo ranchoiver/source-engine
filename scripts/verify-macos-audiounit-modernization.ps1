@@ -48,7 +48,16 @@ Assert-TextMatch $audioUnit 'm_underrunCount\+\+' 'Underruns must be counted.'
 Assert-TextMatch $audioUnit 'SilenceOutput' 'Underruns and unsupported callback layouts must emit silence.'
 Assert-TextMatch $audioUnit 'S_TransferStereo16\(\s*m_sndBuffers' 'Backend must preserve Source mixer ring semantics.'
 Assert-TextMatch $audioUnit 'GetOutputPosition[\s\S]*m_renderedFrames' 'Playback clock must use frames rendered by the AudioUnit callback.'
-Assert-TextMatch $audioUnit 'FramesAvailableForHardware\(\)\s*>=\s*m_startThresholdFrames' 'AudioUnit should wait for prefilled audio before starting.'
+Assert-TextMatch $audioUnit 'FramesAvailableForHardware\(\)\s*>=\s*StartThresholdFrames\(\)' 'AudioUnit should wait for prefilled audio before starting.'
+Assert-TextMatch $audioUnit 'StartThresholdFrames[\s\S]{0,700}snd_mixahead' 'Start threshold must be clamped to the snd_mixahead prefill budget or the unit can never start.'
+Assert-TextMatch $audioUnit 'ThreadInterlockedExchangeAdd\(\s*&m_writtenFrames,\s*end\s*-\s*m_writtenFrames\s*\)' 'Ring write cursor must be published with a full barrier after S_TransferStereo16.'
+Assert-TextMatch $audioUnit 'ThreadInterlockedExchangeAdd\(\s*&m_writtenFrames,\s*0\s*\)' 'Render callback must read the write cursor with a full barrier, never g_paintedtime directly.'
+
+# CoreAudio property IDs and enum constants are not macros: #ifdef/#if defined()
+# on them is always false and silently compiles the guarded feature out.
+if ($audioUnit -match '#\s*if(def\s+|\s+defined\s*\(\s*)kAudio') {
+    throw 'CoreAudio enum constants must not be probed with #ifdef/#if defined() - gate on SDK version macros instead.'
+}
 
 $renderMatch = [regex]::Match(
     $audioUnit,
@@ -65,8 +74,12 @@ if ($renderBody -match 'Audio(OutputUnit(Start|Stop)|Unit(Uninitialize|Initializ
     throw 'AudioUnit render callback must not perform device lifecycle, property, or listener work.'
 }
 
-if ($renderBody -notmatch 'm_renderedFrames\s*\+=\s*requestedFrames') {
-    throw 'Render callback must advance rendered frame clock by hardware-requested frames.'
+if ($renderBody -notmatch 'm_renderedFrames\s*=\s*startFrame\s*\+\s*requestedFrames') {
+    throw 'Render callback must advance the rendered frame clock with a single monotonic store.'
+}
+
+if ($renderBody -match 'g_paintedtime') {
+    throw 'Render callback must not read g_paintedtime directly; use the barrier-published write cursor.'
 }
 
 if ($renderBody -notmatch 'CopyFromMixRing') {
@@ -102,7 +115,7 @@ Assert-TextMatch $engineWscript 'audio/snd_dev_mac_audiounit\.cpp' 'Waf must com
 Assert-TextMatch $engineWscript "'AUDIOUNIT'" 'Engine Waf target must link the AudioUnit framework.'
 Assert-TextMatch $rootWscript 'FRAMEWORK_AUDIOUNIT\s*=\s*"AudioUnit"' 'Root Waf configure must define the AudioUnit framework.'
 Assert-TextMatch $engineVpc 'snd_dev_mac_audiounit\.cpp' 'VPC must include the AudioUnit backend source on macOS.'
-Assert-TextMatch $engineVpc 'AudioUnit' 'VPC must link the AudioUnit framework.'
+Assert-TextMatch $engineVpc '\$SystemFrameworks[^\r\n]*AudioUnit' 'VPC must link the AudioUnit framework.'
 
 Write-Host 'Verified macOS AudioUnit modernization invariants.'
 Write-Host 'AudioUnit is default before AudioQueue fallback; render callback is pull-based, route-aware, and real-time safe.'

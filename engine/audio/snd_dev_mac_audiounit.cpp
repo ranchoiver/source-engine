@@ -10,7 +10,10 @@
 #include <AudioUnit/AudioUnit.h>
 #include <CoreAudio/CoreAudio.h>
 
-#ifndef kAudioObjectPropertyElementMain
+// kAudioObjectPropertyElementMain replaced ...ElementMaster in the macOS 12
+// SDK. Both are enum constants, so they cannot be probed with #ifndef; gate
+// on the SDK version instead.
+#if !defined( MAC_OS_VERSION_12_0 ) || MAC_OS_X_VERSION_MAX_ALLOWED < 120000
 #define kAudioObjectPropertyElementMain kAudioObjectPropertyElementMaster
 #endif
 
@@ -19,6 +22,7 @@
 
 extern bool snd_firsttime;
 extern int g_paintedtime;
+extern ConVar snd_mixahead;
 extern bool MIX_ScaleChannelVolume( paintbuffer_t *ppaint, channel_t *pChannel, int volume[CCHANVOLUMES], int mixchans );
 extern void S_SpatializeChannel( int volume[6], int master_vol, const Vector *psourceDir, float gain, float mono );
 
@@ -71,6 +75,7 @@ private:
 	bool		ValidAudioUnit( void ) const;
 	bool		StartAudioUnit( void );
 	void		StopAudioUnit( void );
+	int			StartThresholdFrames( void );
 	void		ServiceDeviceChanges( void );
 	void		FillStreamFormat( AudioStreamBasicDescription *pFormat );
 	bool		GetDefaultOutputDevice( AudioDeviceID *pDeviceID ) const;
@@ -90,6 +95,10 @@ private:
 	CInterlockedInt	m_deviceSampleCount;
 
 	CInterlockedInt	m_renderedFrames;
+	// Write cursor for the mix ring, published from TransferSamples with a
+	// full barrier and read the same way in RenderAudio; the render thread
+	// must never observe the cursor before the ring bytes it covers.
+	int32 volatile	m_writtenFrames;
 	CInterlockedInt	m_bRunning;
 	CInterlockedInt	m_bFailed;
 	CInterlockedInt	m_deviceChangeGeneration;
@@ -99,7 +108,9 @@ private:
 	int				m_lastDeviceChangeGeneration;
 	int				m_lastReportedUnderruns;
 	int				m_startThresholdFrames;
+	int				m_deviceBufferFrames;
 	double			m_lastUnderrunReportTime;
+	double			m_flNextRecoverTime;
 	bool			m_bDefaultDeviceListenerInstalled;
 	bool			m_bDeviceListenersInstalled;
 	bool			m_bSoundsShutdown;
@@ -118,7 +129,13 @@ static AudioObjectPropertyAddress MakeAudioObjectAddress( AudioObjectPropertySel
 
 static void PreferLowLatencyCoreAudioPowerPolicy()
 {
-#if defined( kAudioHardwarePropertyPowerHint ) && defined( kAudioHardwarePowerHintNone )
+	// kAudioHardwarePropertyPowerHint / kAudioHardwarePowerHintNone are enum
+	// constants (macOS 10.9+), so they cannot be feature-tested with the
+	// preprocessor - #if defined() on them is always false and would compile
+	// this function to a no-op. Gate on the SDK version instead. Per TN2321
+	// the power-saving policy can inflate the device I/O buffer from 512 to
+	// 4096 frames; the request is defensive and nonfatal.
+#if defined( MAC_OS_X_VERSION_10_9 ) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1090
 	AudioObjectPropertyAddress address = MakeAudioObjectAddress( kAudioHardwarePropertyPowerHint, kAudioObjectPropertyScopeGlobal );
 	UInt32 powerHint = kAudioHardwarePowerHintNone;
 	OSStatus status = AudioObjectSetPropertyData( kAudioObjectSystemObject, &address, 0, NULL, sizeof( powerHint ), &powerHint );
@@ -174,6 +191,7 @@ bool CAudioDeviceMacAudioUnit::Init( void )
 	m_sndBuffers = NULL;
 	m_deviceSampleCount = m_SndBufSize / DeviceSampleBytes();
 	m_renderedFrames = 0;
+	m_writtenFrames = 0;
 	m_bRunning = 0;
 	m_bFailed = 0;
 	m_deviceChangeGeneration = 0;
@@ -182,7 +200,9 @@ bool CAudioDeviceMacAudioUnit::Init( void )
 	m_lastDeviceChangeGeneration = 0;
 	m_lastReportedUnderruns = 0;
 	m_startThresholdFrames = 512;
+	m_deviceBufferFrames = 512;
 	m_lastUnderrunReportTime = 0.0;
+	m_flNextRecoverTime = 0.0;
 	m_bDefaultDeviceListenerInstalled = false;
 	m_bDeviceListenersInstalled = false;
 	m_bSoundsShutdown = false;
@@ -338,7 +358,10 @@ bool CAudioDeviceMacAudioUnit::OpenAudioUnit( void )
 
 	RefreshDeviceTiming( m_OutputDeviceID );
 
-	UInt32 maxFramesPerSlice = Max( 512, m_startThresholdFrames );
+	// Must cover the device's actual I/O buffer: a render slice larger than
+	// this fails with kAudioUnitErr_TooManyFramesToProcess and the callback
+	// simply never fires - silence with no error path.
+	UInt32 maxFramesPerSlice = Max( 4096, m_deviceBufferFrames );
 	status = AudioUnitSetProperty( m_AudioUnit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0,
 		&maxFramesPerSlice, sizeof( maxFramesPerSlice ) );
 	if ( status != noErr )
@@ -399,6 +422,15 @@ void CAudioDeviceMacAudioUnit::CloseAudioUnit( bool bFreeMixBuffer )
 
 bool CAudioDeviceMacAudioUnit::RecoverAudioUnit( const char *pReason, OSStatus nError )
 {
+	// Rate-limit: recovery re-instantiates the whole AudioUnit and churns
+	// property listeners. Every caller retries from a later frame, so
+	// declining here only delays the rebuild instead of running it (up to
+	// twice per frame) against a persistently failing device.
+	double flNow = Plat_FloatTime();
+	if ( flNow < m_flNextRecoverTime )
+		return false;
+	m_flNextRecoverTime = flNow + 1.0;
+
 	if ( nError == noErr )
 	{
 		DevMsg( "Recovering macOS AudioUnit output after %s\n", pReason ? pReason : "unknown change" );
@@ -410,7 +442,6 @@ bool CAudioDeviceMacAudioUnit::RecoverAudioUnit( const char *pReason, OSStatus n
 
 	CloseAudioUnit( false );
 	bool bRecovered = OpenAudioUnit();
-	m_lastDeviceChangeGeneration = m_deviceChangeGeneration;
 
 	return bRecovered && ValidAudioUnit() && !m_bFailed;
 }
@@ -458,7 +489,7 @@ void CAudioDeviceMacAudioUnit::InstallDeviceListeners( AudioDeviceID deviceID )
 	}
 
 	AudioObjectPropertyAddress sampleRateAddress = MakeAudioObjectAddress( kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal );
-	AudioObjectPropertyAddress bufferSizeAddress = MakeAudioObjectAddress( kAudioDevicePropertyBufferFrameSize, kAudioDevicePropertyScopeGlobal );
+	AudioObjectPropertyAddress bufferSizeAddress = MakeAudioObjectAddress( kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal );
 	AudioObjectPropertyAddress aliveAddress = MakeAudioObjectAddress( kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal );
 
 	bool bSampleRate = AudioObjectAddPropertyListener( deviceID, &sampleRateAddress, MacAudioUnitDeviceChangedCallback, this ) == noErr;
@@ -500,6 +531,7 @@ void CAudioDeviceMacAudioUnit::RefreshDeviceTiming( AudioDeviceID deviceID )
 	AudioObjectPropertyAddress bufferSizeAddress = MakeAudioObjectAddress( kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal );
 	if ( AudioObjectGetPropertyData( deviceID, &bufferSizeAddress, 0, NULL, &size, &bufferFrameSize ) == noErr && bufferFrameSize > 0 )
 	{
+		m_deviceBufferFrames = (int)bufferFrameSize;
 		m_startThresholdFrames = Max( 512, Min( 4096, (int)bufferFrameSize * 2 ) );
 	}
 
@@ -518,7 +550,12 @@ void CAudioDeviceMacAudioUnit::ServiceDeviceChanges( void )
 	int generation = m_deviceChangeGeneration;
 	if ( generation != m_lastDeviceChangeGeneration )
 	{
-		RecoverAudioUnit( "CoreAudio device change" );
+		if ( RecoverAudioUnit( "CoreAudio device change" ) )
+		{
+			// Acknowledge only the generation observed before the rebuild:
+			// a change that lands mid-recovery must trigger another pass.
+			m_lastDeviceChangeGeneration = generation;
+		}
 		return;
 	}
 
@@ -530,12 +567,24 @@ void CAudioDeviceMacAudioUnit::ServiceDeviceChanges( void )
 
 int CAudioDeviceMacAudioUnit::FramesAvailableForHardware( void )
 {
-	int available = g_paintedtime - (int)m_renderedFrames;
+	int available = m_writtenFrames - (int)m_renderedFrames;
 	if ( available < 0 )
 		return 0;
 
 	int ringFrames = DeviceSampleCount() / DeviceChannels();
 	return Min( available, ringFrames );
+}
+
+int CAudioDeviceMacAudioUnit::StartThresholdFrames( void )
+{
+	// Never demand more prefill than the mixer can produce: PaintBegin mixes
+	// at most snd_mixahead seconds ahead of the clock, so a threshold above
+	// that budget (power-save 4096-frame device buffers, lowered
+	// snd_mixahead) would keep the unit from ever starting - permanent
+	// silence with no failure flag.
+	int mixAheadFrames = (int)( snd_mixahead.GetFloat() * DeviceDmaSpeed() );
+	int attainable = Max( 128, ( mixAheadFrames * 3 ) / 4 );
+	return Min( m_startThresholdFrames, attainable );
 }
 
 void CAudioDeviceMacAudioUnit::CopyFromMixRing( short *pOutput, int startFrame, int frameCount )
@@ -610,12 +659,33 @@ OSStatus CAudioDeviceMacAudioUnit::RenderAudio( AudioUnitRenderActionFlags *ioAc
 	}
 
 	int startFrame = (int)m_renderedFrames;
-	int availableFrames = g_paintedtime - startFrame;
-	if ( availableFrames < 0 || availableFrames > ( DeviceSampleCount() / DeviceChannels() ) )
+	const int ringFrames = DeviceSampleCount() / DeviceChannels();
+	// Full-barrier read pairs with the publish in TransferSamples, so the
+	// ring bytes this cursor covers are visible to this thread.
+	int writtenFrames = ThreadInterlockedExchangeAdd( &m_writtenFrames, 0 );
+	int availableFrames = writtenFrames - startFrame;
+	if ( availableFrames < -ringFrames )
 	{
-		startFrame = g_paintedtime;
+		// The mixer clock jumped far behind (engine timeline rebase); resync.
+		// The backward store below can read as one spurious ring wrap
+		// upstream, which is the price of re-entering the valid window.
+		startFrame = writtenFrames;
 		availableFrames = 0;
-		m_renderedFrames = startFrame;
+	}
+	else if ( availableFrames < 0 )
+	{
+		// Transient mixer stall: emit silence but keep the clock moving
+		// forward. Never store a smaller value for a transient gap -
+		// GetSoundTime() interprets any decrease as a full ring wrap and
+		// would jump g_soundtime by a whole lap.
+		availableFrames = 0;
+	}
+	else if ( availableFrames > ringFrames )
+	{
+		// The mixer lapped a stopped render clock; skip to the freshest lap.
+		// A forward jump is safe for GetSoundTime().
+		startFrame = writtenFrames;
+		availableFrames = 0;
 	}
 
 	int framesToCopy = Min( requestedFrames, availableFrames );
@@ -631,7 +701,9 @@ OSStatus CAudioDeviceMacAudioUnit::RenderAudio( AudioUnitRenderActionFlags *ioAc
 		m_underrunCount++;
 	}
 
-	m_renderedFrames += requestedFrames;
+	// Single store per callback, monotonic except for the explicit rebase
+	// path above.
+	m_renderedFrames = startFrame + requestedFrames;
 	return noErr;
 }
 
@@ -666,7 +738,7 @@ void CAudioDeviceMacAudioUnit::PaintEnd( void )
 		m_lastUnderrunReportTime = now;
 	}
 
-	if ( IsActive() && !m_bRunning && FramesAvailableForHardware() >= m_startThresholdFrames )
+	if ( IsActive() && !m_bRunning && FramesAvailableForHardware() >= StartThresholdFrames() )
 	{
 		StartAudioUnit();
 	}
@@ -694,7 +766,7 @@ void CAudioDeviceMacAudioUnit::UnPause( void )
 		m_pauseCount--;
 	}
 
-	if ( m_pauseCount == 0 && FramesAvailableForHardware() >= m_startThresholdFrames )
+	if ( m_pauseCount == 0 && FramesAvailableForHardware() >= StartThresholdFrames() )
 	{
 		StartAudioUnit();
 	}
@@ -799,6 +871,11 @@ void CAudioDeviceMacAudioUnit::TransferSamples( int end )
 	if ( m_sndBuffers )
 	{
 		S_TransferStereo16( m_sndBuffers, PAINTBUFFER, lpaintedtime, end );
+
+		// Publish the write cursor with a full barrier so the render thread
+		// can never observe the new cursor before the ring bytes written
+		// above. The game thread is the only writer, so the add is exact.
+		ThreadInterlockedExchangeAdd( &m_writtenFrames, end - m_writtenFrames );
 	}
 }
 
@@ -812,7 +889,15 @@ void CAudioDeviceMacAudioUnit::StopAllSounds( void )
 {
 	m_bSoundsShutdown = true;
 	StopAudioUnit();
-	m_renderedFrames = g_paintedtime;
+
+	// Skip whatever is left in the ring, moving the clocks forward only:
+	// GetSoundTime() interprets a decrease of the render clock as a ring
+	// wrap. The unit is stopped, so there is no concurrent render callback.
+	int target = g_paintedtime;
+	if ( target - (int)m_renderedFrames > 0 )
+		m_renderedFrames = target;
+	if ( target - m_writtenFrames > 0 )
+		ThreadInterlockedExchangeAdd( &m_writtenFrames, target - m_writtenFrames );
 }
 
 void CAudioDeviceMacAudioUnit::ApplyDSPEffects( int idsp, portable_samplepair_t *pbuffront, portable_samplepair_t *pbufrear, portable_samplepair_t *pbufcenter, int samplecount )

@@ -11,8 +11,9 @@ The new backend is designed around the macOS/Core Audio model instead of the old
 - underruns emit silence and increment a counter rather than reusing stale audio;
 - default-output, sample-rate, buffer-size, and device-alive property listeners mark route changes;
 - when supported by the SDK/runtime, CoreAudio is told not to favor power-saving audio behavior that can inflate I/O buffer size;
-- the game thread performs device recovery and restart work outside the real-time callback;
-- `GetOutputPosition()` is clocked by frames rendered by the Audio Unit callback.
+- the game thread performs device recovery and restart work outside the real-time callback, rate-limited to once per second;
+- the mixer publishes its ring write cursor with a full memory barrier and the render callback reads it the same way, so the callback can never observe the cursor ahead of the ring bytes it covers (required on weakly-ordered Apple Silicon);
+- `GetOutputPosition()` is clocked by frames rendered by the Audio Unit callback, advancing monotonically so `GetSoundTime()` never sees a spurious ring wrap.
 
 ## Runtime Selection
 
@@ -34,7 +35,9 @@ The older AudioQueue path remains useful as a fallback and already gained route/
 
 The backend keeps Source's existing `snd_mixahead` policy, but removes the extra AudioQueue submission depth from the default path. Startup waits until at least the current hardware buffer depth, clamped to a practical range, is already mixed before starting the Audio Unit. During playback, the Audio Unit callback advances the hardware clock by rendered frames and fills missing frames with silence if the engine falls behind.
 
-It also opts out of CoreAudio's power-saving audio policy when `kAudioHardwarePropertyPowerHint` is available by setting `kAudioHardwarePowerHintNone`. Apple TN2321 documents that favoring power saving can increase the default I/O buffer size from 512 to 4096 frames. Avoiding that policy can prevent about 81 ms of extra buffer latency at 44.1 kHz, while remaining nonfatal on older SDKs or systems that do not expose the property.
+It also sets `kAudioHardwarePropertyPowerHint` to `kAudioHardwarePowerHintNone` (gated on the macOS 10.9 SDK by version macro - the property ID is an enum constant, so `#if defined()` on it is always false and would silently compile the request out). Apple TN2321 documents that favoring power saving can increase the default I/O buffer size from 512 to 4096 frames (about 81 ms at 44.1 kHz); note that the power-saving policy is normally opt-in via an app's `AudioHardwarePowerHint` Info.plist key, so this request is defensive rather than a measured latency win, and it is nonfatal if it fails. Independent of the hint, the unit's `MaximumFramesPerSlice` is sized to cover the device's actual I/O buffer, because a render slice larger than that limit fails without reaching the callback at all.
+
+The start threshold is additionally clamped to the `snd_mixahead` prefill budget: the mixer can never mix further ahead than that, so demanding more prefill than the budget (large power-save device buffers, or a user-lowered `snd_mixahead`) would leave the unit waiting forever with no error.
 
 That gives a cleaner failure mode: a counted underrun instead of stale buffer replay, unbounded queue drift, or audio-thread device recovery.
 
