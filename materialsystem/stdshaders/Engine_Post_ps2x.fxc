@@ -100,7 +100,7 @@ float4	ColorCorrectionVolumeWeights	: register( c4 );
 float	BloomFactor						: register( c5 );
 float4	CryostasisInternal1			: register( c6 ); // x intensity, y Curves contrast, z Panda blend, w MagicHDR bloom blend
 float4	CryostasisInternal2			: register( c7 ); // xyz Panda contrast, w Panda blue gamma
-float4	CryostasisInternal3			: register( c8 ); // x Magic bloom brightness multiplier, y/z blend shape, w bloom saturation
+float4	CryostasisInternal3			: register( c8 ); // x Magic bloom brightness multiplier, y Emphasize depth scale (DestAlphaDepthRange / ReShade far plane), zw unused
 float4	CryostasisInternal4			: register( c9 ); // x AmbientLight intensity, y threshold, z dirt, w dirt overlay
 float4	CryostasisInternal5			: register( c10 ); // x focus depth, y focus range, z focus edge, w effect factor
 
@@ -425,9 +425,15 @@ float3 CryostasisAmbientLight( float3 baseColor, float3 sourceBloom, float inten
 	float3 highDirt = highOrig * CryostasisInternal4.z;
 
 	// The preset enables AmbientLight dirt textures, but the shared preset archive
-	// does not include them. Treating them as white preserves the active weighting.
+	// does not include them. Treating them as white keeps the AL_Adaptive==2
+	// dirt weighting; the upstream time-based vibrance pulse, dither, and
+	// dark-pixel guard are intentionally dropped, and the threshold is applied
+	// to Source's pre-blurred bloom rather than upstream's center blur tap.
 	high = high + high * CryostasisInternal4.w * green;
 	high = high + highDirt;
+	// Upstream boosts the overlay source by the dirt term before the
+	// blue/red passes.
+	highOrig = highOrig + highDirt;
 	high = high + highOrig * CryostasisInternal4.w * blue;
 	high = high + highOrig * CryostasisInternal4.w * red;
 
@@ -485,8 +491,15 @@ float3 CryostasisMagicHDR( float3 color, float3 sourceBloom, float intensity )
 
 float3 CryostasisEmphasize( float3 color, float2 fbTexCoord, float intensity )
 {
+	// On PC the full-frame "depth" texture is a framebuffer copy whose
+	// DESTINATION ALPHA holds linear view depth / DestAlphaDepthRange (the
+	// color channels are scene color, never depth). CryostasisInternal3.y
+	// rescales that onto ReShade's depth convention (fraction of the 1000
+	// unit far plane) that the preset's focus thresholds were tuned against.
+	// Depth saturates at DestAlphaDepthRange (192 units), but the preset's
+	// focus band ends far inside that, so the clamp is invisible.
 	float4 depthSample = tex2D( FullFrameDepthSampler, fbTexCoord );
-	float sceneDepth = saturate( max( depthSample.r, depthSample.a ) );
+	float sceneDepth = saturate( depthSample.a * CryostasisInternal3.y );
 	float desaturateFullRange = CryostasisInternal5.y + CryostasisInternal5.z;
 	float depthDiff = abs( sceneDepth - CryostasisInternal5.x );
 	float depthDiffCoC = saturate( ( depthDiff > desaturateFullRange ) ? 1.0f : smoothstep( CryostasisInternal5.y, desaturateFullRange, depthDiff ) );
@@ -501,9 +514,12 @@ float3 CryostasisPostProcess( float3 baseColor, float3 sourceBloom, float2 fbTex
 	float intensity = saturate( CryostasisInternal1.x );
 	float3 color = baseColor;
 
-	color = CryostasisAmbientLight( color, sourceBloom, intensity );
-	color = CryostasisCurves( color, intensity );
-	color = CryostasisPandaFX( color, intensity );
+	// ReShade quantizes to the RGBA8 backbuffer between techniques; saturate
+	// between stages for the same behavior (Curves' cubic is non-monotonic
+	// above 1).
+	color = saturate( CryostasisAmbientLight( color, sourceBloom, intensity ) );
+	color = saturate( CryostasisCurves( color, intensity ) );
+	color = saturate( CryostasisPandaFX( color, intensity ) );
 	color = CryostasisMagicHDR( color, sourceBloom, intensity );
 	color = CryostasisEmphasize( color, fbTexCoord, intensity );
 
@@ -555,7 +571,13 @@ float4 main( PS_INPUT i ) : COLOR
 	float4 bloomColor = BloomFactor * GetBloomColor( i.baseTexCoord );
 	#if ( CRYOSTASIS_ENABLE == 1 )
 	{
-		outColor.rgb = CryostasisPostProcess( outColor.rgb, bloomColor.rgb, fbTexCoord );
+		// ReShade ran on the finished frame with Source's own bloom already
+		// composited, so feed that composite as the base image and keep the
+		// raw bloom as the AmbientLight/MagicHDR highlight source. (Known
+		// deviation: native color correction runs after this stack rather
+		// than before it.)
+		float3 cryoBase = saturate( outColor.rgb + bloomColor.rgb );
+		outColor.rgb = CryostasisPostProcess( cryoBase, bloomColor.rgb, fbTexCoord );
 	}
 	#else
 	{

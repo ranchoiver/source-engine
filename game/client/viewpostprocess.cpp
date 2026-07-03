@@ -1136,7 +1136,6 @@ static ConVar mat_cryostasis_tonemap_scale( "mat_cryostasis_tonemap_scale", "1.2
 struct CryostasisPostProcessSnapshot_t
 {
 	bool m_bValid;
-	int m_nMatHDRLevel;
 	int m_nMatDynamicTonemapping;
 	int m_nMatHDRUncapExposure;
 	int m_nMatForceBloom;
@@ -1179,7 +1178,6 @@ static void CaptureCryostasisPostProcessSnapshot()
 		return;
 
 	s_CryostasisPostProcessSnapshot.m_bValid = true;
-	s_CryostasisPostProcessSnapshot.m_nMatHDRLevel = mat_hdr_level.GetInt();
 	s_CryostasisPostProcessSnapshot.m_nMatDynamicTonemapping = mat_dynamic_tonemapping.GetInt();
 	s_CryostasisPostProcessSnapshot.m_nMatHDRUncapExposure = mat_hdr_uncapexposure.GetInt();
 	s_CryostasisPostProcessSnapshot.m_nMatForceBloom = mat_force_bloom.GetInt();
@@ -1208,7 +1206,6 @@ static void RestoreCryostasisPostProcessSnapshot()
 		return;
 	}
 
-	mat_hdr_level.SetValue( s_CryostasisPostProcessSnapshot.m_nMatHDRLevel );
 	mat_dynamic_tonemapping.SetValue( s_CryostasisPostProcessSnapshot.m_nMatDynamicTonemapping );
 	mat_hdr_uncapexposure.SetValue( s_CryostasisPostProcessSnapshot.m_nMatHDRUncapExposure );
 	mat_force_bloom.SetValue( s_CryostasisPostProcessSnapshot.m_nMatForceBloom );
@@ -1234,6 +1231,16 @@ static void RestoreCryostasisPostProcessSnapshot()
 
 static void ApplyCryostasisPostProcessPreset( float flIntensity )
 {
+	// The shader stack only exists in ps_2_b combos; on ps20-only hardware the
+	// convar changes below would restyle bloom/tonemapping with no Cryostasis
+	// pass to match.
+	if ( !g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b() &&
+		!g_pMaterialSystemHardwareConfig->ShouldAlwaysUseShaderModel2bShaders() )
+	{
+		ConMsg( "hl2_cryostasis: not supported on this hardware (requires ps_2_b shaders).\n" );
+		return;
+	}
+
 	CaptureCryostasisPostProcessSnapshot();
 
 	flIntensity = CryostasisClamp( flIntensity, 0.0f, 2.0f );
@@ -1241,7 +1248,9 @@ static void ApplyCryostasisPostProcessPreset( float flIntensity )
 
 	const CryostasisPostProcessSnapshot_t &snapshot = s_CryostasisPostProcessSnapshot;
 
-	mat_hdr_level.SetValue( 2 );
+	// NOTE: mat_hdr_level is deliberately not touched - it only takes effect
+	// on map/video reload, and silently flipping an archived HDR setting is a
+	// foot-gun. The preset works under whatever HDR mode is active.
 	mat_dynamic_tonemapping.SetValue( 0 );
 	mat_hdr_uncapexposure.SetValue( 1 );
 	mat_force_bloom.SetValue( 1 );
@@ -1584,10 +1593,15 @@ void CEnginePostMaterialProxy::SetupEnginePostMaterialCryostasis( bool bPerformC
 	s_vCryostasisInternal2[2] = 0.80f;				// PandaFX Contrast_B.
 	s_vCryostasisInternal2[3] = 0.99f;				// PandaFX Gamma_B.
 
+	// Dest alpha stores linear depth / DestAlphaDepthRange (192 world units,
+	// 8192 in float HDR); the preset's Emphasize thresholds assume ReShade's
+	// depth = distance / 1000 (default far plane), so rescale between the two.
+	const float flDestAlphaDepthRange = ( g_pMaterialSystemHardwareConfig->GetHDRType() == HDR_TYPE_FLOAT ) ? 8192.0f : 192.0f;
+
 	s_vCryostasisInternal3[0] = 7.806838f;			// MagicHDR exp(BloomBrightness), BloomBrightness = 2.055.
-	s_vCryostasisInternal3[1] = 0.80f;				// MagicHDR BlendingBase.
-	s_vCryostasisInternal3[2] = 0.50f;				// MagicHDR BlendingAmount.
-	s_vCryostasisInternal3[3] = 0.0f;				// MagicHDR BloomSaturation.
+	s_vCryostasisInternal3[1] = flDestAlphaDepthRange / 1000.0f;	// Emphasize depth scale.
+	s_vCryostasisInternal3[2] = 0.0f;				// Unused.
+	s_vCryostasisInternal3[3] = 0.0f;				// Unused.
 
 	s_vCryostasisInternal4[0] = 5.990005f;			// AmbientLight alInt.
 	s_vCryostasisInternal4[1] = 3.861f;				// AmbientLight alThreshold.
@@ -2652,10 +2666,10 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 					Generate8BitBloomTexture( pRenderContext, flBloomScale, x, y, w, h );
 				}
 
-				if ( bPerformCryostasis )
-				{
-					UpdateFullScreenDepthTexture();
-				}
+				// NOTE: no depth re-copy here for Cryostasis. The engine
+				// already snapshots depth right after opaques render - the
+				// only point where destination alpha is coherent; re-copying
+				// at post time would capture translucency blending garbage.
 
 				// Now add bloom (dest_rt0) to the framebuffer and perform software anti-aliasing and
 				// colour correction, all in one pass (improves performance, reduces quantization errors)

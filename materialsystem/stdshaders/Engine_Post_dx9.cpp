@@ -229,13 +229,15 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			float bloomConstant[4] = { flBloomFactor, flBloomFactor, flBloomFactor, flBloomFactor };
 			pShaderAPI->SetPixelShaderConstant( 5, bloomConstant );
 
-			pShaderAPI->SetPixelShaderConstant( 6, params[ CRYOSTASISINTERNAL1 ]->GetVecValue(), 1 );
-			pShaderAPI->SetPixelShaderConstant( 7, params[ CRYOSTASISINTERNAL2 ]->GetVecValue(), 1 );
-			pShaderAPI->SetPixelShaderConstant( 8, params[ CRYOSTASISINTERNAL3 ]->GetVecValue(), 1 );
-			pShaderAPI->SetPixelShaderConstant( 9, params[ CRYOSTASISINTERNAL4 ]->GetVecValue(), 1 );
-			pShaderAPI->SetPixelShaderConstant( 10, params[ CRYOSTASISINTERNAL5 ]->GetVecValue(), 1 );
+			// c6-c10 and the depth texture are only read by CRYOSTASIS_ENABLE=1
+			// combos; skip the uploads entirely on the vanilla path.
 			if ( cryostasisEnabled )
 			{
+				pShaderAPI->SetPixelShaderConstant( 6, params[ CRYOSTASISINTERNAL1 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 7, params[ CRYOSTASISINTERNAL2 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 8, params[ CRYOSTASISINTERNAL3 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 9, params[ CRYOSTASISINTERNAL4 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 10, params[ CRYOSTASISINTERNAL5 ]->GetVecValue(), 1 );
 				pShaderAPI->BindStandardTexture( SHADER_SAMPLER6, TEXTURE_FRAME_BUFFER_FULL_DEPTH );
 			}
 
