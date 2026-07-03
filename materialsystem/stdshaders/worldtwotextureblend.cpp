@@ -351,10 +351,8 @@ END_SHADER_PARAMS
 					pShaderAPI->BindStandardTexture( SHADER_SAMPLER4, TEXTURE_NORMALMAP_FLAT );
 				}
 			}
-			if( hasFlashlight && !bFlashlightShadows )
-			{
-				pShaderAPI->BindStandardTexture( SHADER_SAMPLER6, TEXTURE_NORMALIZATION_CUBEMAP_SIGNED );
-			}
+			// No bind for sampler 6 without shadows: RandomRotationSampler is
+			// only read inside the FLASHLIGHTSHADOWS=1 combos.
 
 			// If we don't have a texture transform, we don't have
 			// to set vertex shader constants or run vertex shader instructions

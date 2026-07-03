@@ -7,11 +7,7 @@ Fix the HL2 projected flashlight artifacts seen on the native macOS/OpenGL Sourc
 ## Evidence Read
 
 - AppleGamingWiki Half-Life 2 page recommends `r_newflashlight 0` as a workaround because the HL2 flashlight artifacts when interacting with shadows.
-- Desktop screenshots inspected:
-  - `C:\Users\kate\Desktop\Screenshot_15.jpg`
-  - `C:\Users\kate\Desktop\Screenshot_16.jpg`
-  - `C:\Users\kate\Desktop\Screenshot_17.jpg`
-- The screenshots show black rectangular/checker blocks inside the projected flashlight cone, around world geometry shadows. This looks like bad shadow-map filtering/sampler state rather than HUD, battery, or gameplay flashlight logic.
+- In-game screenshots of the artifact were inspected: black rectangular/checker blocks inside the projected flashlight cone, around world geometry shadows. This looks like bad shadow-map filtering/sampler state rather than HUD, battery, or gameplay flashlight logic.
 
 ## Main Finding
 
@@ -31,8 +27,8 @@ On ToGL/OpenGL this was made worse by `togl/linuxwin/dxabstract.cpp` marking sam
   - Enables sampler 6 for flashlight passes.
   - Treats flashlight shadows as active only when the depth texture exists, shadows are enabled, and `g_pConfig->ShadowDepthTexture()` is true.
   - Binds `TEXTURE_SHADOW_NOISE_2D` to sampler 6 when flashlight shadows are active.
-- `togl/linuxwin/dxabstract.cpp`
-  - Changed `ShadowDepthSamplerMaskFromName("worldtwotextureblend_ps")` from sampler 2 to sampler 7.
+- `togl/linuxwin/dxabstract.cpp` and `togles/linuxwin/dxabstract.cpp`
+  - Changed `ShadowDepthSamplerMaskFromName("worldtwotextureblend_ps")` from sampler 2 to sampler 7 in both GL backends.
 - `HL2_FLASHLIGHT_ROOT_CAUSE.md`
   - Added root-cause and build notes.
 
@@ -166,4 +162,14 @@ The waf build compiles the C++ engine/stdshader DLLs, but runtime shader bytecod
 - Targeted ad-hoc `.vcs` generation for `worldtwotextureblend_ps20b.vcs` passed under `.deps`.
 - Full `togl` link has not passed on Windows, but isolated `dxabstract.cpp` syntax check passed with Waf's SDL+ToGL arguments.
 - Official full shader-set VCS regeneration still needs either a matching Source SDK/Valve shadercompile layout or a separate, intentional shadercompile utility fix/build recipe.
+
+## 2026-07-03 review fixes
+
+A full review confirmed the engine-side sampler contract end to end (HLSL declarations, C++ bindings, ToGL mask, and independently recompiled bytecode) and produced these changes:
+
+- Applied the same `(1<<2)` -> `(1<<7)` shadow-depth sampler mask fix to the parallel GLES backend copy in `togles/linuxwin/dxabstract.cpp`; only the `togl/` copy had been updated, which would have reintroduced the identical bug class on Android once the shader bytecode is regenerated.
+- Reversed the "no committed .vcs" decision: the mask change alone against stock Valve bytecode changes the artifact instead of fixing it (depth taps on `s2` become plain cookie reads), so the fixed bytecode and the engine change must ship together. The generator now writes to `materialsystem/stdshaders/shaders/fxc/` (the SDK's shipped-shader location), the regenerated `worldtwotextureblend_ps20b.vcs` is committed, and the root-cause doc gained install instructions. The generator itself only runs on Windows, which is exactly why the artifact is checked in for macOS users.
+- Stamped the shader's official centroid mask `(1<<2)|(1<<3)` into the generated VCS header (and `/DCENTROIDMASK`) instead of 0; the header mask drives the D3D9 ATI MSAA centroid patch and is cross-checked against the name-derived mask on Linux ToGL.
+- Removed the dead `TEXTURE_NORMALIZATION_CUBEMAP_SIGNED` bind to sampler 6 in the non-shadowed flashlight path; no compiled combo (old or new) samples s6 outside `FLASHLIGHTSHADOWS=1`.
+- Hardened both PowerShell tools against `$ErrorActionPreference = 'Stop'` + native stderr redirection (a single benign compiler warning could kill the run mid-way), dropped the no-op fxc defines from the verifier, added a 128 KB `MAX_SHADER_UNPACKED_BLOCK_SIZE` guard to the VCS writer, and scrubbed machine-specific paths from the docs.
 - No live HL2 runtime render test has been performed in this Windows environment.

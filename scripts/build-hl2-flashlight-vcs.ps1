@@ -13,7 +13,9 @@ $scratch = Join-Path $repoRoot '.deps\hl2_flashlight_vcs'
 
 if ( !$OutputPath )
 {
-	$OutputPath = Join-Path $scratch 'shaders\fxc\worldtwotextureblend_ps20b.vcs'
+	# Default to the repo's shipped-shader location so the fixed bytecode is
+	# a deliverable, not a build byproduct.
+	$OutputPath = Join-Path $repoRoot 'materialsystem\stdshaders\shaders\fxc\worldtwotextureblend_ps20b.vcs'
 }
 if ( !( [System.IO.Path]::IsPathRooted( $OutputPath ) ) )
 {
@@ -32,6 +34,15 @@ $workBin = Join-Path $scratch 'worldtwotextureblend_ps20b_combo.bin'
 $dynamicCombos = 16
 $totalCombos = 24576
 $staticCombos = 1536
+# worldtwotextureblend_ps2x.fxc declares CENTROID on TEXCOORD2/TEXCOORD3, so
+# the official pipeline stamps (1<<2)|(1<<3) into the header; ToGL derives the
+# same mask from the shader name, and D3D9 uses the header for the ATI MSAA
+# centroid patch.
+$centroidMask = 12
+# The engine unpacks each uncompressed block into a fixed 128 KB buffer
+# (MAX_SHADER_UNPACKED_BLOCK_SIZE); a larger block would corrupt the heap at
+# load time.
+$maxUnpackedBlockSize = 131072
 
 function Get-StaticDefines( [int]$staticId )
 {
@@ -92,7 +103,7 @@ function Compile-Combo( [int]$staticId, [int]$dynamicId, $s, $d )
 		'/DSHADER_MODEL_PS_2_B=1',
 		'/Dmain=main',
 		"/DTOTALSHADERCOMBOS=$script:totalCombos",
-		'/DCENTROIDMASK=0',
+		"/DCENTROIDMASK=$script:centroidMask",
 		"/DNUMDYNAMICCOMBOS=$script:dynamicCombos",
 		'/DFLAGS=0x0',
 		"/DSHADERCOMBO=$shaderCombo",
@@ -114,7 +125,14 @@ function Compile-Combo( [int]$staticId, [int]$dynamicId, $s, $d )
 		'worldtwotextureblend_ps2x.fxc'
 	)
 
+	# Under $ErrorActionPreference = 'Stop', redirected native stderr lines
+	# become terminating NativeCommandError records even when fxc exits 0
+	# (e.g. a warning); relax it around the invocation and rely on the exit
+	# code check below.
+	$prevEap = $ErrorActionPreference
+	$ErrorActionPreference = 'Continue'
 	$output = & $script:fxc @fxcArgs 2>&1
+	$ErrorActionPreference = $prevEap
 	if ( $LASTEXITCODE -ne 0 -or !( Test-Path -LiteralPath $script:workBin ) )
 	{
 		throw "fxc failed for static=$staticId dynamic=$dynamicId shaderCombo=$shaderCombo`n$output"
@@ -147,6 +165,11 @@ function New-StaticComboPayload( [int]$staticId, [byte[][]]$bytecodesByDynamicId
 	{
 		$payloadWriter.Dispose()
 		$payloadStream.Dispose()
+	}
+
+	if ( $payload.Length -gt $script:maxUnpackedBlockSize )
+	{
+		throw "Static combo $staticId payload is $($payload.Length) bytes; the engine's unpack buffer is $script:maxUnpackedBlockSize"
 	}
 
 	$chunkStream = New-Object System.IO.MemoryStream
@@ -219,7 +242,7 @@ try
 	Write-U32 $writer $totalCombos
 	Write-U32 $writer $dynamicCombos
 	Write-U32 $writer 0
-	Write-U32 $writer 0
+	Write-U32 $writer $centroidMask
 	Write-U32 $writer $recordCount
 	Write-U32 $writer 0
 
@@ -239,7 +262,7 @@ try
 		$writer.Write( [byte[]]$staticPayloads[$staticId] )
 	}
 
-$records.Add( [pscustomobject]@{ StaticId = [uint32]4294967295; Offset = [uint32]$stream.Position } )
+	$records.Add( [pscustomobject]@{ StaticId = [uint32]4294967295; Offset = [uint32]$stream.Position } )
 
 	$stream.Position = $recordTableOffset
 	foreach ( $record in $records )
@@ -272,7 +295,7 @@ try
 	$numStaticRecords = Read-U32 $reader
 	$sourceCrc = Read-U32 $reader
 
-	if ( $version -ne 6 -or $total -ne $totalCombos -or $dynamic -ne $dynamicCombos -or $flags -ne 0 -or $centroid -ne 0 -or $sourceCrc -ne 0 )
+	if ( $version -ne 6 -or $total -ne $totalCombos -or $dynamic -ne $dynamicCombos -or $flags -ne 0 -or $centroid -ne $centroidMask -or $sourceCrc -ne 0 )
 	{
 		throw "Unexpected VCS header in $OutputPath"
 	}

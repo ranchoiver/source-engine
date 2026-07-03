@@ -91,7 +91,13 @@ Push-Location $scratch
 try
 {
 	$buildCmd = 'call "{0}" -arch=x86 >nul && cl /nologo /EHsc /I "{1}" "{2}" /Fe:"{3}" /link /LIBPATH:"{4}" d3dx9.lib' -f $vsDevCmd, $dxInclude, $helperCpp, $helperExe, $dxLib
+	# Relax EAP around the native call: with 'Stop', redirected stderr lines
+	# (e.g. cl warnings) become terminating NativeCommandError records even on
+	# exit code 0.
+	$prevEap = $ErrorActionPreference
+	$ErrorActionPreference = 'Continue'
 	$buildOutput = & cmd.exe /d /c $buildCmd 2>&1
+	$ErrorActionPreference = $prevEap
 	if ( $LASTEXITCODE -ne 0 )
 	{
 		throw "Failed to build $helperExe`n$buildOutput"
@@ -130,17 +136,15 @@ try
 									$comboLabel = "srgb=$convertToSrgb detail=$detailTexture vertexcolor=$vertexColor seamless=$seamless filter=$depthFilterMode waterfog=$writeWaterFogToDestAlpha pixelfog=$pixelFogType writedepth=$writeDepthToDestAlpha"
 									Remove-Item -LiteralPath $bin -Force -ErrorAction SilentlyContinue
 
+									# NOTE: no TOTALSHADERCOMBOS/CENTROIDMASK/SHADERCOMBO
+									# defines here - nothing in this shader's include
+									# chain consumes them; they are shadercompile
+									# bookkeeping, not compile inputs.
 									$fxcArgs = @(
 										'/nologo',
 										'/Tps_2_b',
 										'/Emain',
 										'/DSHADER_MODEL_PS_2_B=1',
-										'/Dmain=main',
-										'/DTOTALSHADERCOMBOS=24576',
-										'/DCENTROIDMASK=0',
-										'/DNUMDYNAMICCOMBOS=16',
-										'/DFLAGS=0x0',
-										"/DSHADERCOMBO=$comboCount",
 										"/DWRITEWATERFOGTODESTALPHA=$writeWaterFogToDestAlpha",
 										"/DPIXELFOGTYPE=$pixelFogType",
 										"/DWRITE_DEPTH_TO_DESTALPHA=$writeDepthToDestAlpha",
@@ -159,14 +163,23 @@ try
 										'worldtwotextureblend_ps2x.fxc'
 									)
 
+									# Relax EAP around native calls: with 'Stop', a
+									# redirected stderr line (e.g. an fxc warning)
+									# becomes a terminating NativeCommandError even on
+									# exit code 0, bypassing the failure collection.
+									$prevEap = $ErrorActionPreference
+									$ErrorActionPreference = 'Continue'
 									$compileOutput = & $fxc @fxcArgs 2>&1
+									$ErrorActionPreference = $prevEap
 									if ( $LASTEXITCODE -ne 0 -or !( Test-Path -LiteralPath $bin ) )
 									{
 										$failures.Add( "fxc failed for $comboLabel`n$compileOutput" )
 										continue
 									}
 
+									$ErrorActionPreference = 'Continue'
 									$asmOutput = & $helperExe $bin 2>&1
+									$ErrorActionPreference = $prevEap
 									if ( $LASTEXITCODE -ne 0 )
 									{
 										$failures.Add( "disassembly failed for $comboLabel`n$asmOutput" )
