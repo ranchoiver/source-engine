@@ -106,6 +106,9 @@ sampler	CryostasisBloom3Sampler			: register( s9 );
 sampler	CryostasisBloom4Sampler			: register( s10 );
 sampler	CryostasisBloom5Sampler			: register( s11 );
 sampler	CryostasisBloom6Sampler			: register( s12 );
+// s0 keeps the native thresholded bloom (vanilla binding, correct color-space
+// handling in GetBloomColor); the MagicHDR chain's LOD 0 rides s13 instead.
+sampler	CryostasisBloom0Sampler			: register( s13 );
 
 float4	psTapOffs_Packed				: register( c0 ); // psTapOffs_packed contains 1-pixel offsets: ( +dX, 0, +dY, -dX )
 float4	tweakables						: register( c1 ); // (x - AA strength/unused) (y - reduction of 1-pixel-line blur)
@@ -117,7 +120,7 @@ float4	ColorCorrectionVolumeWeights	: register( c4 );
 float	BloomFactor						: register( c5 );
 float4	CryostasisInternal1			: register( c6 ); // x intensity, y Curves contrast, z Panda blend, w MagicHDR bloom blend
 float4	CryostasisInternal2			: register( c7 ); // xyz Panda contrast, w Panda blue gamma
-float4	CryostasisInternal3			: register( c8 ); // x Magic bloom brightness multiplier, y/z blend shape, w bloom saturation
+float4	CryostasisInternal3			: register( c8 ); // x unused (bloom brightness is applied in the MagicHDR inverse pass), y Emphasize depth scale (DestAlphaDepthRange / ReShade far plane), zw unused
 float4	CryostasisInternal4			: register( c9 ); // x AmbientLight intensity, y threshold, z dirt, w dirt overlay
 float4	CryostasisInternal5			: register( c10 ); // x focus depth, y focus range, z focus edge, w effect factor
 
@@ -428,24 +431,6 @@ float3 CryostasisBakingLabACES( float3 color )
 	return saturate( ( color * ( color + A ) - B ) / ( color * ( C * color + D ) + E ) );
 }
 
-float3 CryostasisApproxLinearToGamma( float3 color )
-{
-	color = max( color, 0.00001f );
-	return color * rsqrt( color );
-}
-
-float3 CryostasisPostRTSample( float3 color )
-{
-	#if ( LINEAR_INPUT == 1 )
-	{
-		return CryostasisApproxLinearToGamma( color );
-	}
-	#else
-	{
-		return color;
-	}
-	#endif
-}
 
 float3 CryostasisAmbientLight( float3 baseColor, float3 sourceBloom, float2 fbTexCoord, float intensity )
 {
@@ -472,6 +457,9 @@ float3 CryostasisAmbientLight( float3 baseColor, float3 sourceBloom, float2 fbTe
 	highOrig += highDirt;
 
 	// Cryostasis.ini uses AmbientLight AL_Adaptive=2 with Dirt/DirtOVR/DirtOVB.
+	// The upstream time-based vibrance pulse, dither, and dark-pixel guard are
+	// intentionally dropped, and the threshold applies to Source's pre-blurred
+	// bloom rather than upstream's center blur tap.
 	high = high + high * dirtOVR * CryostasisInternal4.w * green;
 	high = high + highDirt;
 	high = high + highOrig * dirtOVB * CryostasisInternal4.w * blue;
@@ -518,14 +506,18 @@ float3 CryostasisPandaFX( float3 color, float intensity )
 
 float3 CryostasisMagicHDR( float3 color, float2 bloomUV, float intensity )
 {
+	// The LOD chain lives in float16 RTs holding raw inverse-tonemapped HDR
+	// values (display-referred, brightness applied in the inverse pass), so
+	// the taps need no color-space adaptation on any platform. Weights are
+	// MagicHDR's NormalDistribution( i, 5.6, 3.5 ) / 7.
 	float3 bloom = 0.0f;
-	bloom += CryostasisPostRTSample( GetBloomColor( bloomUV ).rgb ) * 0.0068652342f;
-	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom1Sampler, bloomUV * 0.5f ).rgb ) * 0.0095942507f;
-	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom2Sampler, bloomUV * 0.25f ).rgb ) * 0.0123570316f;
-	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom3Sampler, bloomUV * 0.125f ).rgb ) * 0.0146677885f;
-	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom4Sampler, bloomUV * 0.0625f ).rgb ) * 0.0160458420f;
-	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom5Sampler, bloomUV * 0.03125f ).rgb ) * 0.0161773646f;
-	bloom += CryostasisPostRTSample( tex2D( CryostasisBloom6Sampler, bloomUV * 0.015625f ).rgb ) * 0.0150314343f;
+	bloom += tex2D( CryostasisBloom0Sampler, bloomUV ).rgb * 0.0068652342f;
+	bloom += tex2D( CryostasisBloom1Sampler, bloomUV * 0.5f ).rgb * 0.0095942507f;
+	bloom += tex2D( CryostasisBloom2Sampler, bloomUV * 0.25f ).rgb * 0.0123570316f;
+	bloom += tex2D( CryostasisBloom3Sampler, bloomUV * 0.125f ).rgb * 0.0146677885f;
+	bloom += tex2D( CryostasisBloom4Sampler, bloomUV * 0.0625f ).rgb * 0.0160458420f;
+	bloom += tex2D( CryostasisBloom5Sampler, bloomUV * 0.03125f ).rgb * 0.0161773646f;
+	bloom += tex2D( CryostasisBloom6Sampler, bloomUV * 0.015625f ).rgb * 0.0150314343f;
 
 	float3 hdrColor = CryostasisReinhardInverse( saturate( color ) );
 	float3 merged = lerp( hdrColor, bloom, saturate( CryostasisInternal1.w * intensity ) );
@@ -535,9 +527,15 @@ float3 CryostasisMagicHDR( float3 color, float2 bloomUV, float intensity )
 
 float3 CryostasisEmphasize( float3 color, float2 fbTexCoord, float intensity )
 {
+	// On PC the full-frame "depth" texture is a framebuffer copy whose
+	// DESTINATION ALPHA holds linear view depth / DestAlphaDepthRange (the
+	// color channels are scene color, never depth). CryostasisInternal3.y
+	// rescales that onto ReShade's depth convention (fraction of the 1000
+	// unit far plane) that the preset's focus thresholds were tuned against.
+	// Depth saturates at DestAlphaDepthRange (192 units), but the preset's
+	// focus band ends far inside that, so the clamp is invisible.
 	float4 depthSample = tex2D( FullFrameDepthSampler, fbTexCoord );
-	float alphaDepth = depthSample.a / max( OO_DESTALPHA_DEPTH_RANGE, 0.000001f );
-	float sceneDepth = saturate( lerp( depthSample.r, alphaDepth, step( 0.000001f, depthSample.a ) ) );
+	float sceneDepth = saturate( depthSample.a * CryostasisInternal3.y );
 	float desaturateFullRange = CryostasisInternal5.y + CryostasisInternal5.z;
 	float depthDiff = abs( sceneDepth - CryostasisInternal5.x );
 	float depthDiffCoC = saturate( ( depthDiff > desaturateFullRange ) ? 1.0f : smoothstep( CryostasisInternal5.y, desaturateFullRange, depthDiff ) );
@@ -552,9 +550,12 @@ float3 CryostasisPostProcess( float3 baseColor, float3 sourceBloom, float2 fbTex
 	float intensity = saturate( CryostasisInternal1.x );
 	float3 color = baseColor;
 
-	color = CryostasisAmbientLight( color, sourceBloom, fbTexCoord, intensity );
-	color = CryostasisCurves( color, intensity );
-	color = CryostasisPandaFX( color, intensity );
+	// ReShade quantizes to the RGBA8 backbuffer between techniques; saturate
+	// between stages for the same behavior (Curves' cubic is non-monotonic
+	// above 1).
+	color = saturate( CryostasisAmbientLight( color, sourceBloom, fbTexCoord, intensity ) );
+	color = saturate( CryostasisCurves( color, intensity ) );
+	color = saturate( CryostasisPandaFX( color, intensity ) );
 	color = CryostasisMagicHDR( color, bloomUV, intensity );
 	color = CryostasisEmphasize( color, fbTexCoord, intensity );
 
@@ -606,7 +607,15 @@ float4 main( PS_INPUT i ) : COLOR
 	float4 bloomColor = BloomFactor * GetBloomColor( i.baseTexCoord );
 	#if ( CRYOSTASIS_ENABLE == 1 )
 	{
-		outColor.rgb = CryostasisPostProcess( outColor.rgb, CryostasisPostRTSample( bloomColor.rgb ), fbTexCoord, i.baseTexCoord );
+		// ReShade ran on the finished frame with Source's own bloom already
+		// composited, so feed that composite as the base image and keep the
+		// native thresholded bloom (s0, vanilla binding) as the AmbientLight
+		// bright-pass source; the MagicHDR combine reads its own float16 LOD
+		// chain from s7-s13. (Known deviation: native color correction is
+		// disabled while Cryostasis is active, freeing s2-s4 for dirt and
+		// s15 for the gamma table.)
+		float3 cryoBase = saturate( outColor.rgb + bloomColor.rgb );
+		outColor.rgb = CryostasisPostProcess( cryoBase, bloomColor.rgb, fbTexCoord, i.baseTexCoord );
 	}
 	#else
 	{

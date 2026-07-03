@@ -48,9 +48,11 @@ BEGIN_VS_SHADER_FLAGS( Cryostasis_MagicHDR_Blur_dx9, "HL2 Cryostasis MagicHDR ga
 			pShaderShadow->EnableAlphaWrites( true );
 			pShaderShadow->EnableTexture( SHADER_SAMPLER0, true );
 
-			bool bForceSRGBReadAndWrite = IsOSX() && g_pHardwareConfig->CanDoSRGBReadFromRTs();
-			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER0, bForceSRGBReadAndWrite );
-			pShaderShadow->EnableSRGBWrite( bForceSRGBReadAndWrite );
+			// Both source and destination are float16 RTs holding raw HDR
+			// values; no sRGB conversion applies, so the adapter combo stays
+			// off on all platforms.
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER0, false );
+			pShaderShadow->EnableSRGBWrite( false );
 			pShaderShadow->VertexShaderVertexFormat( VERTEX_POSITION, 1, NULL, 0 );
 
 			DECLARE_STATIC_VERTEX_SHADER( screenspaceeffect_vs20 );
@@ -58,7 +60,7 @@ BEGIN_VS_SHADER_FLAGS( Cryostasis_MagicHDR_Blur_dx9, "HL2 Cryostasis MagicHDR ga
 
 			DECLARE_STATIC_PIXEL_SHADER( cryostasis_magichdr_blur_ps20b );
 #ifndef _X360
-			SET_STATIC_PIXEL_SHADER_COMBO( APPROX_SRGB_ADAPTER, bForceSRGBReadAndWrite );
+			SET_STATIC_PIXEL_SHADER_COMBO( APPROX_SRGB_ADAPTER, 0 );
 #endif
 			SET_STATIC_PIXEL_SHADER( cryostasis_magichdr_blur_ps20b );
 		}

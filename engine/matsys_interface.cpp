@@ -1102,13 +1102,15 @@ static ITexture *CreateTeenyFBTexture( int n )
 
 static ITexture *CreateCryostasisQuarterSizedFBTexture( const char *pTextureName )
 {
-	ImageFormat fmt = materials->GetBackBufferFormat();
-	if ( g_pMaterialSystemHardwareConfig->GetHDRType() == HDR_TYPE_FLOAT )
-		fmt = IMAGE_FORMAT_RGBA16161616F;
-
+	// Always float16: the MagicHDR chain stores inverse-tonemapped HDR values
+	// (up to ~78 with the preset's exp(2.055) brightness). An 8-bit RT clips
+	// them to 1.0 and reduces the whole bloom stage to a white-clip mask.
+	// ps_2_b-era hardware (D3D9 and macOS GL) supports float16 RTs, and raw
+	// float storage also removes every sRGB encode/decode concern from the
+	// chain.
 	return materials->CreateNamedRenderTargetTextureEx2(
 		pTextureName, 0, 0, RT_SIZE_HDR,
-		fmt, MATERIAL_RT_DEPTH_SHARED,
+		IMAGE_FORMAT_RGBA16161616F, MATERIAL_RT_DEPTH_SHARED,
 		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT,
 		CREATERENDERTARGETFLAGS_HDR );
 }

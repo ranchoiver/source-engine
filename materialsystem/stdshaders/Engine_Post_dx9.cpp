@@ -198,13 +198,16 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER6, true );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER6, false );
 
-			// MagicHDR's remaining bloom LODs are bound to samplers 7-12.
+			// MagicHDR's bloom LOD chain is bound to samplers 7-12 (LODs 1-6)
+			// and 13 (LOD 0). The RTs are float16 holding raw HDR values, so
+			// sRGB read state is irrelevant/disabled.
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER7, true );
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER8, true );
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER9, true );
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER10, true );
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER11, true );
 			pShaderShadow->EnableTexture(  SHADER_SAMPLER12, true );
+			pShaderShadow->EnableTexture(  SHADER_SAMPLER13, true );
 
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER7, false );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER8, false );
@@ -212,6 +215,7 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER10, false );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER11, false );
 			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER12, false );
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER13, false );
 
 			int		format				= VERTEX_POSITION;
 			int		numTexCoords		= 1;
@@ -288,29 +292,31 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 			int bloomEnabled				=    ( params[ BLOOMENABLE      ]->GetIntValue()    == 0    ) ? 0 : 1;
 			int colCorrectEnabled			=    ccInfo.m_bIsEnabled;
 			int cryostasisEnabled			=    ( params[ CRYOSTASISENABLE ]->GetIntValue()    == 0    ) ? 0 : 1;
-			cryostasisEnabled				= cryostasisEnabled && g_pHardwareConfig->SupportsPixelShaders_2_b();
+			cryostasisEnabled				= cryostasisEnabled && ( g_pHardwareConfig->SupportsPixelShaders_2_b() || g_pHardwareConfig->ShouldAlwaysUseShaderModel2bShaders() );
 			if ( cryostasisEnabled )
 			{
 				colCorrectEnabled = 0;
 				colCorrectNumLookups = 0;
 			}
 
-			if ( cryostasisEnabled )
-				BindTexture( SHADER_SAMPLER0, CRYOSTASISBLOOM0, -1 );
-			else
-				BindTexture( SHADER_SAMPLER0, BASETEXTURE, -1 );
+			// s0 always carries the native thresholded bloom; the Cryostasis
+			// AmbientLight bright-pass reads it, and the MagicHDR LOD 0 is
+			// bound separately on s13.
+			BindTexture( SHADER_SAMPLER0, BASETEXTURE, -1 );
 
 			float flBloomFactor = bloomEnabled ? 1.0f : 0.0f;
 			float bloomConstant[4] = { flBloomFactor, flBloomFactor, flBloomFactor, flBloomFactor };
 			pShaderAPI->SetPixelShaderConstant( 5, bloomConstant );
 
-			pShaderAPI->SetPixelShaderConstant( 6, params[ CRYOSTASISINTERNAL1 ]->GetVecValue(), 1 );
-			pShaderAPI->SetPixelShaderConstant( 7, params[ CRYOSTASISINTERNAL2 ]->GetVecValue(), 1 );
-			pShaderAPI->SetPixelShaderConstant( 8, params[ CRYOSTASISINTERNAL3 ]->GetVecValue(), 1 );
-			pShaderAPI->SetPixelShaderConstant( 9, params[ CRYOSTASISINTERNAL4 ]->GetVecValue(), 1 );
-			pShaderAPI->SetPixelShaderConstant( 10, params[ CRYOSTASISINTERNAL5 ]->GetVecValue(), 1 );
+			// c6-c10 and the depth texture are only read by CRYOSTASIS_ENABLE=1
+			// combos; skip the uploads entirely on the vanilla path.
 			if ( cryostasisEnabled )
 			{
+				pShaderAPI->SetPixelShaderConstant( 6, params[ CRYOSTASISINTERNAL1 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 7, params[ CRYOSTASISINTERNAL2 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 8, params[ CRYOSTASISINTERNAL3 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 9, params[ CRYOSTASISINTERNAL4 ]->GetVecValue(), 1 );
+				pShaderAPI->SetPixelShaderConstant( 10, params[ CRYOSTASISINTERNAL5 ]->GetVecValue(), 1 );
 				BindTexture( SHADER_SAMPLER2, CRYOSTASISDIRT, -1 );
 				BindTexture( SHADER_SAMPLER3, CRYOSTASISDIRTOVR, -1 );
 				BindTexture( SHADER_SAMPLER4, CRYOSTASISDIRTOVB, -1 );
@@ -321,6 +327,7 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 				BindTexture( SHADER_SAMPLER10, CRYOSTASISBLOOM4, -1 );
 				BindTexture( SHADER_SAMPLER11, CRYOSTASISBLOOM5, -1 );
 				BindTexture( SHADER_SAMPLER12, CRYOSTASISBLOOM6, -1 );
+				BindTexture( SHADER_SAMPLER13, CRYOSTASISBLOOM0, -1 );
 			}
 
 			if ( !colCorrectEnabled )
