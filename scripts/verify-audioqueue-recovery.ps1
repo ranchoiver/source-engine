@@ -15,7 +15,7 @@ function Assert-Match {
     }
 }
 
-Assert-Match 'CInterlockedInt\s+m_buffersCompleted\s*;' 'm_buffersCompleted must be interlocked because AudioQueue callbacks update it.'
+Assert-Match 'CInterlockedUInt\s+m_buffersCompleted\s*;' 'm_buffersCompleted must be interlocked and wrap safely because AudioQueue callbacks update it.'
 Assert-Match 'CInterlockedInt\s+m_bRunning\s*;' 'm_bRunning must be interlocked because the AudioQueue property listener updates it.'
 Assert-Match 'CInterlockedInt\s+m_bQueueDeviceChanged\s*;' 'AudioQueue current-device changes must be communicated safely to the game thread.'
 Assert-Match 'void\s+CAudioDeviceAudioQueue::ResetQueuedBufferStateToPlayback' 'AudioQueue recovery must reset submitted queue state to the playback point.'
@@ -38,7 +38,9 @@ Assert-Match 'PaintedAheadFrames\(\)' 'Queue refill must be clamped to the mixer
 Assert-Match 'm_flNextRecoverTime' 'Recovery must be rate-limited so failure loops cannot rebuild the queue at frame rate.'
 Assert-Match 'm_flStallToleranceSec' 'The stall detector must tolerate slow Bluetooth route establishment and back off when recoveries stay unproductive.'
 Assert-Match 'CAudioDeviceAudioQueue\s+\*pAudioQueue\s*=\s*\(CAudioDeviceAudioQueue\s+\*\)pContext\s*;' 'AudioQueue callback should use its context pointer, not the global device pointer.'
-Assert-Match 'AudioQueueStop\(m_Queue,\s*true\);\s*ResetQueuedBufferStateToPlayback\(\);' 'Immediate AudioQueue stops must reset submitted-buffer state.'
+Assert-Match 'void\s+CAudioDeviceAudioQueue::StopWaveOut' 'Pause and StopAllSounds must share checked stop/recovery handling.'
+Assert-Match 'm_buffersCompleted\.AtomicAdd\(\s*0\s*\)' 'Callback counters require interlocked reads, not just volatile conversions.'
+Assert-Match 'completed\s*&\s*BUFF_MASK' 'Mask the completion count before converting to frames to avoid signed overflow.'
 
 $getOutputPosition = [regex]::Match(
     $source,
@@ -51,7 +53,7 @@ if (!$getOutputPosition.Success) {
 }
 
 $getOutputPositionBody = $getOutputPosition.Groups['body'].Value
-if ($getOutputPositionBody -notmatch 'm_buffersCompleted') {
+if ($getOutputPositionBody -notmatch 'CompletedBufferCount\(') {
     throw 'GetOutputPosition must clock playback from completed AudioQueue buffers.'
 }
 
@@ -72,4 +74,5 @@ if ($incrementPos -lt $recoverPos) {
 }
 
 Write-Host 'Verified macOS AudioQueue recovery invariants.'
-Write-Host 'Playback clock uses completed buffers; failed enqueue/start/stall paths recover; mixed ring buffer is preserved.'
+Write-Host 'Buffer-acquisition clock wraps safely; failed queue operations recover; mixed ring buffer is preserved.'
+Write-Host 'These are source-shape checks only. Run python scripts/test-audioqueue-recovery.py --sanitize for behavioral coverage.'

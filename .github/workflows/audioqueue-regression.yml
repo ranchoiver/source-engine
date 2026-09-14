@@ -1,0 +1,33 @@
+name: AudioQueue recovery regression
+on:
+  pull_request:
+    paths:
+      - 'engine/audio/snd_dev_mac_audioqueue.cpp'
+      - 'scripts/test-audioqueue-recovery.py'
+      - 'scripts/tests/audioqueue/**'
+      - '.github/workflows/audioqueue-regression.yml'
+  push:
+    paths:
+      - 'engine/audio/snd_dev_mac_audioqueue.cpp'
+      - 'scripts/test-audioqueue-recovery.py'
+      - 'scripts/tests/audioqueue/**'
+      - '.github/workflows/audioqueue-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Run production backend with simulated AudioQueue
+        run: python3 scripts/test-audioqueue-recovery.py --sanitize
+      - name: Check real Apple SDK declarations
+        if: runner.os == 'macOS'
+        run: python3 scripts/test-audioqueue-recovery.py --native-syntax
