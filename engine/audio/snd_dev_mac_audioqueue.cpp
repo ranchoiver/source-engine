@@ -13,12 +13,23 @@
 #include "tier0/memdbgon.h"
 
 extern bool snd_firsttime;
+extern int g_soundtime;
 extern bool MIX_ScaleChannelVolume( paintbuffer_t *ppaint, channel_t *pChannel, int volume[CCHANVOLUMES], int mixchans );
 extern void S_SpatializeChannel( int volume[6], int master_vol, const Vector *psourceDir, float gain, float mono );
 
 #define NUM_BUFFERS_SOURCES		128
 #define	BUFF_MASK				(NUM_BUFFERS_SOURCES - 1 )
 #define	BUFFER_SIZE			0x0400
+
+// Recovery tears down and rebuilds the entire queue, so it must never run
+// more often than the output route can plausibly come back.
+#define AQ_RECOVER_COOLDOWN_SEC			1.0
+// Bluetooth route establishment (AirPods profile switches) can take a couple
+// of seconds during which a started queue completes nothing; start tolerant
+// and back off further while recoveries stay unproductive so we don't tear
+// the route down while it is still coming up.
+#define AQ_STALL_TOLERANCE_BASE_SEC		2.5
+#define AQ_STALL_TOLERANCE_MAX_SEC		20.0
 
 
 //-----------------------------------------------------------------------------
@@ -63,13 +74,21 @@ public:
 	int			DeviceSampleCount( void )	{ return m_deviceSampleCount; }
 
 	void BufferCompleted() { m_buffersCompleted++; }
-	void SetRunning( bool bState ) { m_bRunning = bState; }
+	void SetRunning( bool bState ) { m_bRunning = bState ? 1 : 0; }
+	void MarkQueueDeviceChanged() { m_bQueueDeviceChanged = 1; }
 	
 private:
 	void	OpenWaveOut( void );
-	void	CloseWaveOut( void );
+	void	CloseWaveOut( bool bFreeMixBuffer = true );
+	void	StopWaveOut( void );
+	bool	RecoverWaveOut( const char *pReason, OSStatus nError = noErr );
 	bool	ValidWaveOut( void ) const;
 	bool	BIsPlaying();
+	bool	IsQueueRunning( void );
+	uint32	CompletedBufferCount( void );
+	int		QueuedBufferCount( void );
+	int		PaintedAheadFrames( void );
+	void	ResetQueuedBufferStateToPlayback( void );
 
 	AudioStreamBasicDescription m_DataFormat;
 	AudioQueueRef               m_Queue;
@@ -81,13 +100,19 @@ private:
 	
 	CInterlockedInt	m_deviceSampleCount;
 
-	int			m_buffersSent;
-	int			m_buffersCompleted;
+	uint32		m_buffersSent;
+	CInterlockedUInt	m_buffersCompleted;
 	int			m_pauseCount;
 	bool		m_bSoundsShutdown;
 	
 	bool m_bFailed;
-	bool m_bRunning;
+	CInterlockedInt m_bRunning;
+	CInterlockedInt m_bQueueDeviceChanged;
+	uint32 m_lastObservedCompleted;
+	uint32 m_completedAtLastClockQuery;
+	double m_lastProgressTime;
+	double m_flNextRecoverTime;
+	double m_flStallToleranceSec;
 	
 	
 };
@@ -97,8 +122,9 @@ CAudioDeviceAudioQueue *wave = NULL;
 
 static void AudioCallback(void *pContext, AudioQueueRef pQueue, AudioQueueBufferRef pBuffer)
 {
-	if ( wave )
-		wave->BufferCompleted();
+	CAudioDeviceAudioQueue *pAudioQueue = (CAudioDeviceAudioQueue *)pContext;
+	if ( pAudioQueue )
+		pAudioQueue->BufferCompleted();
 }
 
 
@@ -132,12 +158,19 @@ bool CAudioDeviceAudioQueue::Init( void )
 	m_bHeadphone = false;
 	m_buffersSent = 0;
 	m_buffersCompleted = 0;
+	m_lastObservedCompleted = 0;
+	m_completedAtLastClockQuery = 0;
+	m_lastProgressTime = Plat_FloatTime();
+	m_flNextRecoverTime = 0.0;
+	m_flStallToleranceSec = AQ_STALL_TOLERANCE_BASE_SEC;
 	m_pauseCount = 0;
 	m_bSoundsShutdown = false;
 	m_bFailed = false;
-	m_bRunning = false;
+	m_bRunning = 0;
+	m_bQueueDeviceChanged = 0;
 	
 	m_Queue = NULL;
+	Q_memset( m_Buffers, 0, sizeof( m_Buffers ) );
 	
 	static bool first = true;
 	if ( first )
@@ -171,6 +204,46 @@ inline bool CAudioDeviceAudioQueue::ValidWaveOut( void ) const
 	return m_sndBuffers != 0 && m_Queue; 
 }
 
+inline bool CAudioDeviceAudioQueue::IsQueueRunning( void )
+{
+	return ( m_bRunning.AtomicAdd( 0 ) != 0 );
+}
+
+uint32 CAudioDeviceAudioQueue::CompletedBufferCount( void )
+{
+	// CInterlockedIntT's conversion operator is only a volatile load. Use an
+	// interlocked read to synchronize with callbacks on every architecture.
+	return m_buffersCompleted.AtomicAdd( 0 );
+}
+
+int CAudioDeviceAudioQueue::QueuedBufferCount( void )
+{
+	// Unsigned subtraction preserves the small distance across counter wrap.
+	uint32 cQueued = m_buffersSent - CompletedBufferCount();
+	Assert( cQueued <= NUM_BUFFERS_SOURCES );
+	return (int)cQueued;
+}
+
+void CAudioDeviceAudioQueue::ResetQueuedBufferStateToPlayback( void )
+{
+	// Call only once a synchronous stop/dispose has returned buffer ownership.
+	// A returned buffer means its PCM was acquired, not necessarily heard.
+	m_buffersSent = CompletedBufferCount();
+}
+
+int CAudioDeviceAudioQueue::PaintedAheadFrames( void )
+{
+	// Frames of valid mixed audio ahead of the buffer-acquisition clock.
+	// g_soundtime was derived from m_completedAtLastClockQuery (see
+	// GetOutputPosition), so subtracting what CoreAudio acquired since
+	// that clock sample re-bases (g_paintedtime - g_soundtime) onto
+	// m_buffersCompleted. Pure deltas keep normal playback aligned through
+	// the engine's whole-ring 32-bit time rebases.
+	const int nFramesPerBuffer = BUFFER_SIZE / ( DeviceSampleBytes() * DeviceChannels() );
+	const uint32 nCompletedSinceQuery = CompletedBufferCount() - m_completedAtLastClockQuery;
+	return ( g_paintedtime - g_soundtime ) - (int)( nCompletedSinceQuery * nFramesPerBuffer );
+}
+
 
 //-----------------------------------------------------------------------------
 // called by the mac audioqueue code when we run out of playback buffers
@@ -178,12 +251,26 @@ inline bool CAudioDeviceAudioQueue::ValidWaveOut( void ) const
 void AudioQueueIsRunningCallback( void* inClientData, AudioQueueRef inAQ, AudioQueuePropertyID inID)
 {
     CAudioDeviceAudioQueue* audioqueue = (CAudioDeviceAudioQueue*)inClientData;
+	if ( !audioqueue )
+		return;
 	
 	UInt32 running = 0;
-	UInt32 size;
+	UInt32 size = sizeof( running );
 	OSStatus err = AudioQueueGetProperty(inAQ, kAudioQueueProperty_IsRunning, &running, &size);
-	audioqueue->SetRunning( running != 0 );
+	if ( err == noErr )
+	{
+		audioqueue->SetRunning( running != 0 );
+	}
 	//DevWarning( "AudioQueueStart %d\n", running );
+}
+
+void AudioQueueCurrentDeviceChangedCallback( void* inClientData, AudioQueueRef inAQ, AudioQueuePropertyID inID)
+{
+	CAudioDeviceAudioQueue* audioqueue = (CAudioDeviceAudioQueue*)inClientData;
+	if ( audioqueue )
+	{
+		audioqueue->MarkQueueDeviceChanged();
+	}
 }
 
 
@@ -197,8 +284,9 @@ void CAudioDeviceAudioQueue::OpenWaveOut( void )
 	if ( m_Queue ) 
 		return;
 		
-	m_buffersSent = 0;
-	m_buffersCompleted = 0;
+	m_bFailed = false;
+	m_bRunning = 0;
+	Q_memset( m_Buffers, 0, sizeof( m_Buffers ) );
 		
     m_DataFormat.mSampleRate       = 44100;
     m_DataFormat.mFormatID         = kAudioFormatLinearPCM;
@@ -227,20 +315,16 @@ void CAudioDeviceAudioQueue::OpenWaveOut( void )
 		{
 			DevMsg( "Failed to AudioQueueAllocateBuffer output %d (%i)\n",(int)err,i );
 			m_bFailed = true;
+			CloseWaveOut( false );
+			return;
 		}
 		
         m_Buffers[i]->mAudioDataByteSize = BUFFER_SIZE;        
         Q_memset( m_Buffers[i]->mAudioData, 0, BUFFER_SIZE );
     }
 	
-    err = AudioQueuePrime( m_Queue, 0, NULL);
-	if ( err != noErr) 
-	{
-		DevMsg( "Failed to create AudioQueue output %d\n", (int)err );
-		m_bFailed = true;
-		return;
-	}
-	
+	// Prime only after PaintEnd has enqueued PCM. There is nothing to decode
+	// during queue creation (Apple documents enqueue -> prime -> start).
 	AudioQueueSetParameter( m_Queue, kAudioQueueParam_Volume, 1.0);
 	
 	err = AudioQueueAddPropertyListener( m_Queue, kAudioQueueProperty_IsRunning, AudioQueueIsRunningCallback, this );
@@ -248,7 +332,18 @@ void CAudioDeviceAudioQueue::OpenWaveOut( void )
 	{
 		DevMsg( "Failed to create AudioQueue output %d\n", (int)err );
 		m_bFailed = true;
+		CloseWaveOut( false );
 		return;
+	}
+
+	// NOTE: kAudioQueueProperty_CurrentDevice is an enum constant, not a macro,
+	// so it must not be probed with #ifdef (that always evaluates false and
+	// silently compiles the listener out). It exists in every macOS SDK this
+	// engine can build against; registration failure is nonfatal.
+	err = AudioQueueAddPropertyListener( m_Queue, kAudioQueueProperty_CurrentDevice, AudioQueueCurrentDeviceChangedCallback, this );
+	if ( err != noErr )
+	{
+		DevMsg( "Failed to listen for AudioQueue device changes %d\n", (int)err );
 	}
 	
 	m_SndBufSize = NUM_BUFFERS_SOURCES*BUFFER_SIZE;
@@ -257,6 +352,12 @@ void CAudioDeviceAudioQueue::OpenWaveOut( void )
 	if ( !m_sndBuffers )
 	{
 		m_sndBuffers = malloc( m_SndBufSize );
+		if ( !m_sndBuffers )
+		{
+			m_bFailed = true;
+			CloseWaveOut( false );
+			return;
+		}
 		memset( m_sndBuffers, 0x0, m_SndBufSize );
 	}
 }
@@ -265,28 +366,86 @@ void CAudioDeviceAudioQueue::OpenWaveOut( void )
 //-----------------------------------------------------------------------------
 // Closes the windows wave out device
 //-----------------------------------------------------------------------------
-void CAudioDeviceAudioQueue::CloseWaveOut( void ) 
+void CAudioDeviceAudioQueue::CloseWaveOut( bool bFreeMixBuffer )
 { 
-	if ( ValidWaveOut() )
+	if ( m_Queue )
 	{
-		AudioQueueStop(m_Queue, true);
-		m_bRunning = false;
-		
 		AudioQueueRemovePropertyListener( m_Queue, kAudioQueueProperty_IsRunning, AudioQueueIsRunningCallback, this );
-		
-		for ( int i = 0; i < NUM_BUFFERS_SOURCES; i++ )
-			AudioQueueFreeBuffer( m_Queue, m_Buffers[i]);
+		AudioQueueRemovePropertyListener( m_Queue, kAudioQueueProperty_CurrentDevice, AudioQueueCurrentDeviceChangedCallback, this );
 
-		AudioQueueDispose( m_Queue, true);
-		
+		// Synchronous disposal stops callbacks and frees every queue buffer.
+		// Do not free buffers first: a failed AudioQueueStop would leave the
+		// queue still owning them. No callback can arrive after disposal.
+		AudioQueueDispose( m_Queue, true );
 		m_Queue = NULL;
+		Q_memset( m_Buffers, 0, sizeof( m_Buffers ) );
+		m_bRunning = 0;
+		// Account for discarded PCM even if reset did not need a callback for
+		// every buffer; the next queue starts at the submitted frontier.
+		m_buffersCompleted = m_buffersSent;
 	}
 	
-	if ( m_sndBuffers )
+	if ( bFreeMixBuffer && m_sndBuffers )
 	{
 		free( m_sndBuffers );
 		m_sndBuffers = NULL;
 	}
+}
+
+void CAudioDeviceAudioQueue::StopWaveOut( void )
+{
+	if ( m_Queue )
+	{
+		OSStatus err = AudioQueueStop( m_Queue, true );
+		if ( err != noErr )
+		{
+			DevMsg( "Failed to AudioQueueStop output %d\n", (int)err );
+			// Do not re-use buffers from a queue whose stop failed. Dispose it
+			// now and let PaintEnd recover when unpaused and off cooldown.
+			m_bFailed = true;
+			CloseWaveOut( false );
+		}
+		else
+		{
+			m_buffersCompleted = m_buffersSent;
+		}
+	}
+	m_bRunning = 0;
+	ResetQueuedBufferStateToPlayback();
+	m_lastObservedCompleted = CompletedBufferCount();
+	m_lastProgressTime = Plat_FloatTime();
+}
+
+bool CAudioDeviceAudioQueue::RecoverWaveOut( const char *pReason, OSStatus nError )
+{
+	if ( m_pauseCount > 0 )
+		return false;
+
+	// Rate-limit recovery. Every caller retries on later frames, so declining
+	// here only delays the rebuild; recovering at frame rate would hitch the
+	// main thread and can keep knocking a Bluetooth route back down while it
+	// is trying to come up.
+	double flNow = Plat_FloatTime();
+	if ( flNow < m_flNextRecoverTime )
+		return false;
+	m_flNextRecoverTime = flNow + AQ_RECOVER_COOLDOWN_SEC;
+
+	if ( nError == noErr )
+	{
+		DevMsg( "Recovering AudioQueue output after %s\n", pReason ? pReason : "unknown error" );
+	}
+	else
+	{
+		DevMsg( "Recovering AudioQueue output after %s %d\n", pReason ? pReason : "unknown error", (int)nError );
+	}
+
+	CloseWaveOut( false );
+	ResetQueuedBufferStateToPlayback();
+	OpenWaveOut();
+	m_lastObservedCompleted = CompletedBufferCount();
+	m_lastProgressTime = Plat_FloatTime();
+
+	return ValidWaveOut() && !m_bFailed;
 }
 
 
@@ -301,6 +460,12 @@ int CAudioDeviceAudioQueue::PaintBegin( float mixAheadTime, int soundtime, int p
 	//  endtime - target for samples in mixahead buffer at speed
 
 	unsigned int endtime = soundtime + mixAheadTime * DeviceDmaSpeed();
+	// At least one complete queue buffer is needed to start the clock. With
+	// snd_mixahead below 256/44100 seconds, neither playback nor the painted
+	// frontier could previously advance far enough to submit any audio.
+	const unsigned int nFramesPerBuffer = BUFFER_SIZE / ( DeviceSampleBytes() * DeviceChannels() );
+	if ( endtime - soundtime < nFramesPerBuffer )
+		endtime = soundtime + nFramesPerBuffer;
 	
 	int samps = DeviceSampleCount() >> (DeviceChannels()-1);
 
@@ -323,55 +488,133 @@ int CAudioDeviceAudioQueue::PaintBegin( float mixAheadTime, int soundtime, int p
 //-----------------------------------------------------------------------------
 void CAudioDeviceAudioQueue::PaintEnd( void )
 {
-	int	cblocks = 4 << 1; 
+	if ( m_pauseCount > 0 )
+		return;
 
-	if ( m_bRunning && m_buffersSent == m_buffersCompleted )
+	if ( !ValidWaveOut() || m_bFailed )
 	{
-		// We are running the audio queue but have become starved of buffers.
-		// Stop the audio queue so we force a restart of it.
-		AudioQueueStop( m_Queue, true );
+		// This rebuild also services route changes already pending. Otherwise
+		// a failed device-change rebuild leaves a flag that forces another
+		// teardown immediately after the route finally becomes available.
+		// Consume before rebuilding so a newer callback remains pending.
+		int nPendingDeviceChange = m_bQueueDeviceChanged.InterlockedExchange( 0 );
+		if ( !RecoverWaveOut( "invalid queue" ) )
+		{
+			if ( nPendingDeviceChange != 0 )
+				m_bQueueDeviceChanged = 1;
+			return;
+		}
 	}
 
+	if ( m_bQueueDeviceChanged.InterlockedExchange( 0 ) != 0 )
+	{
+		if ( !RecoverWaveOut( "AudioQueue device change" ) )
+		{
+			// Recovery declined (paused or on cooldown) - keep the request
+			// pending so the route change isn't dropped.
+			m_bQueueDeviceChanged = 1;
+			return;
+		}
+	}
+
+	uint32 completed = CompletedBufferCount();
+	if ( completed != m_lastObservedCompleted )
+	{
+		m_lastObservedCompleted = completed;
+		m_lastProgressTime = Plat_FloatTime();
+		m_flStallToleranceSec = AQ_STALL_TOLERANCE_BASE_SEC;
+	}
+	else if ( IsQueueRunning() && QueuedBufferCount() > 0 && ( Plat_FloatTime() - m_lastProgressTime ) > m_flStallToleranceSec )
+	{
+		// Back off while recoveries stay unproductive; real progress resets
+		// the tolerance above.
+		if ( m_flStallToleranceSec * 2.0 <= AQ_STALL_TOLERANCE_MAX_SEC )
+			m_flStallToleranceSec *= 2.0;
+		if ( !RecoverWaveOut( "playback stall" ) )
+			return;
+	}
+
+	// Returned buffers only indicate that CoreAudio acquired their contents.
+	// Even when all are reusable, PCM may still be waiting for the hardware.
+	// Refill the running queue instead of stopping and discarding that audio.
+
 	//
-	// submit a few new sound blocks
+	// submit a few new sound blocks, but never past the mixer's painted
+	// frontier: ring regions beyond it still hold the previous lap's audio
+	// (~0.74s old), which is what a frame hitch or a lowered snd_mixahead
+	// would otherwise make audible.
 	//
 	// 44K sound support
-	while (((m_buffersSent - m_buffersCompleted) >> SAMPLE_16BIT_SHIFT) < cblocks)
-	{	
-		int iBuf = m_buffersSent&BUFF_MASK; 
-		
+	const int cTargetQueuedBuffers = 16;
+	const int nFramesPerBuffer = BUFFER_SIZE / ( DeviceSampleBytes() * DeviceChannels() );
+	while ( QueuedBufferCount() < cTargetQueuedBuffers &&
+		( QueuedBufferCount() + 1 ) * nFramesPerBuffer <= PaintedAheadFrames() )
+	{
+		int iBuf = m_buffersSent&BUFF_MASK;
+
 		m_Buffers[iBuf]->mAudioDataByteSize = BUFFER_SIZE;
 		Q_memcpy( m_Buffers[iBuf]->mAudioData, (char *)m_sndBuffers + iBuf*BUFFER_SIZE, BUFFER_SIZE);
-		
+
 		// Queue the buffer for playback.
 		OSStatus err = AudioQueueEnqueueBuffer( m_Queue, m_Buffers[iBuf], 0, NULL);
-		if ( err != noErr) 
+		if ( err != noErr)
 		{
 			DevMsg( "Failed to AudioQueueEnqueueBuffer output %d\n", (int)err );
+			// Latch failure even if recovery is declined by its cooldown. Do
+			// not retry the broken queue or start its partially queued audio.
+			m_bFailed = true;
+			RecoverWaveOut( "AudioQueueEnqueueBuffer", err );
+			return;
 		}
-		
+
 		m_buffersSent++;
 	}
 
 	
-	if ( !m_bRunning )
+	if ( !IsQueueRunning() && QueuedBufferCount() > 0 )
 	{
 		DevMsg( "Restarting sound playback\n" );
-		m_bRunning = true;
-		AudioQueueStart( m_Queue, NULL);
+		OSStatus err = AudioQueuePrime( m_Queue, 0, NULL );
+		if ( err != noErr )
+		{
+			DevMsg( "Failed to AudioQueuePrime output %d\n", (int)err );
+			m_bFailed = true;
+			RecoverWaveOut( "AudioQueuePrime", err );
+			return;
+		}
+
+		err = AudioQueueStart( m_Queue, NULL);
+		if ( err == noErr )
+		{
+			m_bRunning = 1;
+			// A long pause must not spend the new route's entire stall grace.
+			m_lastObservedCompleted = CompletedBufferCount();
+			m_lastProgressTime = Plat_FloatTime();
+		}
+		else
+		{
+			DevMsg( "Failed to AudioQueueStart output %d\n", (int)err );
+			m_bFailed = true;
+			RecoverWaveOut( "AudioQueueStart", err );
+		}
 	}
 
 }
 
 int CAudioDeviceAudioQueue::GetOutputPosition( void )
 {
-	int s = m_buffersSent * BUFFER_SIZE;
+	uint32 completed = CompletedBufferCount();
 
-	s >>= SAMPLE_16BIT_SHIFT;
+	// GetSoundTime() derives g_soundtime from this position; remember the
+	// completion count backing the engine's most recent clock sample so
+	// PaintedAheadFrames() can re-base (g_paintedtime - g_soundtime) onto the
+	// live completion count.
+	m_completedAtLastClockQuery = completed;
 
-	s &= (DeviceSampleCount()-1);
-
-	return s / DeviceChannels();
+	// Mask before multiplying: completed * BUFFER_SIZE overflowed a signed
+	// int after about 3.4 hours. Only the position within one ring is needed.
+	const int nFramesPerBuffer = BUFFER_SIZE / ( DeviceSampleBytes() * DeviceChannels() );
+	return ( completed & BUFF_MASK ) * nFramesPerBuffer;
 }
 
 
@@ -383,8 +626,7 @@ void CAudioDeviceAudioQueue::Pause( void )
 	m_pauseCount++;
 	if (m_pauseCount == 1)
 	{
-		m_bRunning = false;
-		AudioQueueStop(m_Queue, true);
+		StopWaveOut();
 	}
 }
 
@@ -396,11 +638,9 @@ void CAudioDeviceAudioQueue::UnPause( void )
 		m_pauseCount--;
 	}
 	
-	if ( m_pauseCount == 0 )
-	{ 
-		m_bRunning = true;
-		AudioQueueStart( m_Queue, NULL);
-	}
+	// Pause() re-synced the submit cursor to the completion cursor, so the
+	// queue has nothing in flight here; the next PaintEnd() enqueues fresh
+	// buffers and restarts playback.
 }
 
 bool CAudioDeviceAudioQueue::IsActive( void )
@@ -435,11 +675,14 @@ void CAudioDeviceAudioQueue::UpdateListener( const Vector& position, const Vecto
 
 bool CAudioDeviceAudioQueue::BIsPlaying()
 {
+	if ( !m_Queue )
+		return false;
+
 	UInt32 isRunning;  
 	UInt32 propSize = sizeof(isRunning);  
   
     OSStatus result = AudioQueueGetProperty( m_Queue, kAudioQueueProperty_IsRunning, &isRunning, &propSize);  
-	return isRunning != 0;
+	return result == noErr && isRunning != 0;
 }
 
 
@@ -536,8 +779,7 @@ void CAudioDeviceAudioQueue::SpatializeChannel( int volume[CCHANVOLUMES/2], int 
 void CAudioDeviceAudioQueue::StopAllSounds( void )
 {
 	m_bSoundsShutdown = true;
-	m_bRunning = false;
-	AudioQueueStop(m_Queue, true);
+	StopWaveOut();
 }
 
 
@@ -595,5 +837,3 @@ void OnSndSurroundCvarChanged2( IConVar *pVar, const char *pOldString, float flO
 void OnSndSurroundLegacyChanged2( IConVar *pVar, const char *pOldString, float flOldValue )
 {
 }
-
-
