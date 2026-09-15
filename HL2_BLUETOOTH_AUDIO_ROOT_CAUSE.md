@@ -1,83 +1,111 @@
-# HL2 Bluetooth Audio Stutter Root Cause
+# HL2 macOS AudioQueue recovery
 
-## Summary
+PR #2 hardens Source's macOS AudioQueue backend for Bluetooth/AirPods route
+changes and output stalls. This is the native path unless `-snd_openal` is
+selected. Other audio backends and global mixer defaults are unchanged.
 
-The AirPods/Bluetooth stutter reported for the native macOS Half-Life 2 build was rooted in the macOS `AudioQueue` output backend, not in AirPods-specific game logic.
+## What the callback actually means
 
-The engine's default macOS output path uses `AudioQueue` (`engine/audio/snd_win.cpp`) unless `-snd_openal` is passed. That backend pushed fixed-size PCM buffers into CoreAudio, but it clocked Source's mixer from the number of buffers submitted to `AudioQueue`, not the number of buffers CoreAudio had actually consumed. It also treated `AudioQueueEnqueueBuffer` and `AudioQueueStart` failures as console messages instead of device-loss or route-change recovery events.
+Apple calls `AudioQueueOutputCallback` when it has **acquired the buffer's
+contents**, making that buffer reusable. The PCM may still be buffered
+internally and may not have reached the speaker. Priming can return buffers
+before playback starts. A return caused by an immediate reset can instead
+represent discarded audio.
 
-Bluetooth devices make that fragile behavior visible because macOS can pause, restart, or renegotiate the output path when the route changes, when AirPods switch profiles, or when the system audio server hiccups. The old Source backend could then keep advancing its internal clock ahead of real playback, skip recovery after failed queue operations, and get stuck around stale queued-buffer state. Muting and unmuting the Mac helped because it forced the system output path to recover underneath the game.
+The backend therefore uses a **buffer-acquisition clock**, not an exact
+speaker/DAC clock. This is more useful than counting submitted buffers, but
+does not measure Bluetooth latency or prove audible playback progress.
 
-## Why The Wiki Workarounds Helped
+The most serious remaining error in the earlier PR was treating zero pending
+buffers as proof of audible starvation: it called `AudioQueueStop(..., true)`
+and discarded PCM that CoreAudio could still be waiting to play. The reviewed
+backend refills a running queue without stopping it just because its buffers
+are reusable. A stopped queue is primed and started after data is enqueued.
 
-AppleGamingWiki lists two relevant workarounds:
+## Reviewed behavior
 
-- async audio: `snd_async_fullyasync 1; snd_async_minsize 0; snd_noextraupdate 1`
-- AirPods stutter: mute and unmute the Mac
+- Completion and submission counters use unsigned arithmetic, including across
+  wrap. Callback counters are read through interlocked operations.
+- `GetOutputPosition()` masks to one ring before converting buffers to frames.
+  The previous signed `completed * 1024` overflowed after 2,097,152 buffers,
+  approximately 3.38 hours at 44.1 kHz with 256 stereo frames per buffer.
+- Refill never submits a complete buffer beyond the mixer's painted frontier.
+  `PaintBegin()` budgets at least one 256-frame buffer (about 5.8 ms), so
+  lowering `snd_mixahead` below that duration cannot deadlock startup.
+- Queue creation does not prime an empty queue. Playback follows Apple's
+  documented enqueue -> prime -> start order.
+- Enqueue, prime and start errors latch failure even when recovery is on
+  cooldown. A broken queue is not retried every frame or partially restarted.
+- Device changes, unavailable queues and stalled acquisition trigger recovery
+  outside the CoreAudio callback. Rebuilds are rate-limited to once per second.
+- A pending device-change request survives cooldown or creation failure. The
+  next successful invalid-queue rebuild consumes the existing request rather
+  than unnecessarily tearing down the newly restored device again. Changes
+  arriving during a rebuild remain pending.
+- Stall grace starts anew when playback starts, including after a long pause.
+  Repeated stalls back off from 2.5 to 5, 10 and 20 seconds; subsequent buffer
+  acquisition restores the initial tolerance.
+- Pause and StopAllSounds share checked immediate-stop handling. If stop fails,
+  the queue is synchronously disposed before any buffer can be reused.
+- Disposal owns freeing the AudioQueue buffers. The backend no longer calls
+  `AudioQueueFreeBuffer` while a failed-stop queue may still own a buffer.
+- Successful synchronous stop/dispose accounts for discarded submitted PCM,
+  preserving the forward clock and retaining the engine's allocated mix ring.
+  No old-queue callback can run after synchronous disposal returns.
+- `PaintEnd()` respects nested pauses. Allocation failure is handled before
+  clearing the mix ring.
 
-The async audio settings can hide stalls from file and streaming sound loads, and disabling extra updates reduces some main-thread mixer timing churn. They do not repair the output-device clock or recover a broken `AudioQueue`.
+The engine ring contains 128 x 1,024 bytes, or 32,768 stereo frames. The refill
+target is 16 outstanding buffers (about 93 ms); this does **not** include
+additional PCM already acquired and buffered by CoreAudio or the device.
 
-The mute/unmute workaround fits the actual output-backend failure mode better: it nudges macOS/CoreAudio to rebuild or restart the selected output route, which can get playback moving again even though Source itself did not repair its queue state.
+## Behavioral regression tests
 
-## Broken Behavior
+```
+python3 scripts/test-audioqueue-recovery.py --sanitize
+```
 
-The old `AudioQueue` backend had three important problems:
+Requires Python 3.8+ and GCC or Clang (`CXX` can select the compiler). The runner
+compiles the **actual production backend** with a minimal engine boundary and
+a deterministic fake AudioQueue. The fake independently models reusable
+buffers and PCM still awaiting playback; it can inject creation, enqueue,
+prime, start and stop failures. It does not duplicate the backend's recovery
+state machine.
 
-1. `GetOutputPosition()` used `m_buffersSent`.
-   - `m_buffersSent` means Source handed a buffer to `AudioQueue`.
-   - It does not prove that the buffer was heard, consumed, or even survived a route change.
-   - Source's mixer uses `GetOutputPosition()` as the hardware playback clock, so this made the engine chase a submitted-buffer clock instead of a playback-progress clock.
+The 18 scenarios cover early buffer returns, tiny mixahead, long sessions,
+unsigned and signed counter boundaries, stop/disposal ownership, nested pause,
+restart grace, failure cooldowns, route recovery, stall backoff and the painted
+frontier. `--source /path/to/old.cpp` runs the same cases against an earlier
+revision. Several fail against `c59ec07`, including signed overflow detected by
+UndefinedBehaviorSanitizer.
 
-2. Failed queue operations did not recover.
-   - `AudioQueueEnqueueBuffer` errors were logged but still followed by normal loop flow.
-   - `AudioQueueStart` errors were ignored.
-   - AudioQueue current-device changes were not treated as route changes that should rebuild output state.
-   - A queue that stopped completing buffers could remain half-alive.
+On macOS, also run:
 
-3. Immediate stops flushed CoreAudio queue state without re-syncing Source's submit cursor.
-   - `AudioQueueStop(..., true)` returns unplayed buffers through their completion callbacks, so the in-flight counts self-corrected, but the submitted-buffer playback clock then included up to ~93 ms of audio that was never heard, and nothing re-aligned the submit cursor with the ring before new buffers went out.
+```
+python3 scripts/test-audioqueue-recovery.py --native-syntax
+```
 
-## Fix
+This additionally compiles the backend against the real Apple AudioToolbox SDK
+declarations, retaining the minimal engine boundary. It is not a full engine
+build. The dedicated GitHub workflow runs behavioral checks on Linux/macOS and
+this SDK check on macOS when Actions are enabled for the fork.
 
-`engine/audio/snd_dev_mac_audioqueue.cpp` now:
+`scripts/verify-audioqueue-recovery.ps1` remains a supplemental source-pattern
+check. A Windows engine build does not compile this macOS-only implementation.
 
-- clocks playback from `m_buffersCompleted`, which is advanced by the `AudioQueue` output callback after CoreAudio has taken a buffer;
-- makes `m_buffersCompleted` and `m_bRunning` interlocked because they are updated from AudioQueue callbacks/property listeners;
-- does not advance submitted-buffer state after a failed enqueue;
-- watches AudioQueue current-device changes (registered unconditionally: the property ID is an enum constant, so it cannot be feature-tested with the preprocessor);
-- recovers the `AudioQueue` on invalid queue state, device changes, enqueue/prime/start/stop errors, and a running queue that stops completing buffers;
-- rate-limits recovery to once per second across all trigger sites, allows at most one rebuild per mix pass from the enqueue path, and uses an escalating stall tolerance (2.5 s doubling to 20 s, reset on progress) so slow Bluetooth route establishment is not torn down mid-setup;
-- preserves Source's mixed ring buffer during recovery, then re-syncs the submit cursor to the completed playback point (the up-to-~93 ms CoreAudio flushed is skipped rather than replayed, keeping the playback clock monotonic);
-- clamps buffer submission to the mixer's painted frontier so ring regions still holding the previous lap's audio are never enqueued, protecting slow mix passes and lowered `snd_mixahead` values;
-- explicitly primes the queue after buffers are enqueued and before playback starts;
-- resets submitted queue state after pause uses `AudioQueueStop(..., true)`.
+## Runtime verification still needed
 
-## Scope
+The deterministic tests verify backend control flow, buffer ownership and clock
+arithmetic. They cannot establish the real AirPods/Bluetooth listening result.
+On a native macOS build, check speaker -> Bluetooth -> speaker transitions,
+disconnect/reconnect, long and nested pauses, loading hitches, and small
+`snd_mixahead` values. Confirm there is no repeated clipping/restarting and
+that audio resumes after the output route returns.
 
-This PR intentionally fixes the native macOS/AirPods stutter path without changing global mixer defaults or rewriting every backend.
+## API references
 
-A deeper macOS modernization should be a separate follow-up PR. That work should evaluate an Audio Unit/AUHAL or AVAudioEngine-style output path, device sample-rate/buffer-size tracking, and a callback-fed ring buffer with explicit underrun and drift handling. That is a larger backend design change than the focused `AudioQueue` route-recovery fix here.
-
-## Validation
-
-- `scripts/verify-audioqueue-recovery.ps1`
-  - verifies that the macOS playback clock uses completed AudioQueue buffers rather than submitted buffers;
-  - verifies enqueue/start/stall recovery paths, recovery rate limiting, and the painted-frontier submission clamp;
-  - rejects `#ifdef`/`#if defined()` probes of CoreAudio enum constants (always false, silently dead-codes the feature);
-  - verifies recovery preserves the mixed ring buffer.
-  - Note: this is a source-shape check, not a compile or runtime test; it exists because this file only compiles on macOS.
-- `py -3 waf configure -T release --build-games=hl2`
-- `py -3 waf build --targets=soundemittersystem,vaudio_minimp3`
-- `py -3 waf build --targets=engine -j1`
-
-The macOS `AudioQueue` file cannot be compiled on this Windows host, so the targeted verifier covers the macOS-only invariants and the local host build catches shared engine/audio regressions.
-
-## References
-
-- AppleGamingWiki Half-Life 2 page: https://www.applegamingwiki.com/wiki/Half-Life_2
-- Apple `AudioQueueOutputCallback`: https://developer.apple.com/documentation/audiotoolbox/audioqueueoutputcallback
-- Apple `kAudioQueueProperty_IsRunning`: https://developer.apple.com/documentation/audiotoolbox/kaudioqueueproperty_isrunning
-- Apple Audio Queue property IDs: https://developer.apple.com/documentation/audiotoolbox/audio-queue-property-ids
-- Apple `AudioQueuePrime`: https://developer.apple.com/documentation/audiotoolbox/audioqueueprime%28_%3A_%3A_%3A%29
-- Apple Core Audio overview: https://developer.apple.com/library/archive/documentation/MusicAudio/Conceptual/CoreAudioOverview/CoreAudioEssentials/CoreAudioEssentials.html
-- Apple TN2321 low-latency audio: https://developer.apple.com/library/archive/technotes/tn2321/_index.html
+- [AudioQueueOutputCallback](https://developer.apple.com/documentation/audiotoolbox/audioqueueoutputcallback)
+- [AudioQueuePrime](https://developer.apple.com/documentation/audiotoolbox/audioqueueprime(_:_:_:))
+- [AudioQueueStop](https://developer.apple.com/documentation/audiotoolbox/audioqueuestop(_:_:))
+- [AudioQueueReset](https://developer.apple.com/documentation/audiotoolbox/audioqueuereset(_:))
+- [AudioQueueDispose](https://developer.apple.com/documentation/audiotoolbox/audioqueuedispose(_:_:))

@@ -80,11 +80,13 @@ public:
 private:
 	void	OpenWaveOut( void );
 	void	CloseWaveOut( bool bFreeMixBuffer = true );
+	void	StopWaveOut( void );
 	bool	RecoverWaveOut( const char *pReason, OSStatus nError = noErr );
 	bool	ValidWaveOut( void ) const;
 	bool	BIsPlaying();
-	bool	IsQueueRunning( void ) const;
-	int		QueuedBufferCount( void ) const;
+	bool	IsQueueRunning( void );
+	uint32	CompletedBufferCount( void );
+	int		QueuedBufferCount( void );
 	int		PaintedAheadFrames( void );
 	void	ResetQueuedBufferStateToPlayback( void );
 
@@ -98,16 +100,16 @@ private:
 	
 	CInterlockedInt	m_deviceSampleCount;
 
-	int			m_buffersSent;
-	CInterlockedInt	m_buffersCompleted;
+	uint32		m_buffersSent;
+	CInterlockedUInt	m_buffersCompleted;
 	int			m_pauseCount;
 	bool		m_bSoundsShutdown;
 	
 	bool m_bFailed;
 	CInterlockedInt m_bRunning;
 	CInterlockedInt m_bQueueDeviceChanged;
-	int m_lastObservedCompleted;
-	int m_completedAtLastClockQuery;
+	uint32 m_lastObservedCompleted;
+	uint32 m_completedAtLastClockQuery;
 	double m_lastProgressTime;
 	double m_flNextRecoverTime;
 	double m_flStallToleranceSec;
@@ -202,38 +204,44 @@ inline bool CAudioDeviceAudioQueue::ValidWaveOut( void ) const
 	return m_sndBuffers != 0 && m_Queue; 
 }
 
-inline bool CAudioDeviceAudioQueue::IsQueueRunning( void ) const
+inline bool CAudioDeviceAudioQueue::IsQueueRunning( void )
 {
-	return ( m_bRunning != 0 );
+	return ( m_bRunning.AtomicAdd( 0 ) != 0 );
 }
 
-int CAudioDeviceAudioQueue::QueuedBufferCount( void ) const
+uint32 CAudioDeviceAudioQueue::CompletedBufferCount( void )
 {
-	int cQueued = m_buffersSent - (int)m_buffersCompleted;
-	return ( cQueued > 0 ) ? cQueued : 0;
+	// CInterlockedIntT's conversion operator is only a volatile load. Use an
+	// interlocked read to synchronize with callbacks on every architecture.
+	return m_buffersCompleted.AtomicAdd( 0 );
+}
+
+int CAudioDeviceAudioQueue::QueuedBufferCount( void )
+{
+	// Unsigned subtraction preserves the small distance across counter wrap.
+	uint32 cQueued = m_buffersSent - CompletedBufferCount();
+	Assert( cQueued <= NUM_BUFFERS_SOURCES );
+	return (int)cQueued;
 }
 
 void CAudioDeviceAudioQueue::ResetQueuedBufferStateToPlayback( void )
 {
-	// Re-sync the submit cursor with the completion cursor. Note that
-	// AudioQueueStop( ..., true ) flushes unplayed buffers by firing their
-	// completion callbacks, so up to the in-flight ~93ms is skipped rather
-	// than replayed; what matters is that the completed-buffer clock stays
-	// monotonic, which is what GetSoundTime() requires.
-	m_buffersSent = (int)m_buffersCompleted;
+	// Call only once a synchronous stop/dispose has returned buffer ownership.
+	// A returned buffer means its PCM was acquired, not necessarily heard.
+	m_buffersSent = CompletedBufferCount();
 }
 
 int CAudioDeviceAudioQueue::PaintedAheadFrames( void )
 {
-	// Frames of valid mixed audio ahead of the live hardware clock.
+	// Frames of valid mixed audio ahead of the buffer-acquisition clock.
 	// g_soundtime was derived from m_completedAtLastClockQuery (see
-	// GetOutputPosition), so subtracting what the hardware consumed since
+	// GetOutputPosition), so subtracting what CoreAudio acquired since
 	// that clock sample re-bases (g_paintedtime - g_soundtime) onto
-	// m_buffersCompleted. Pure deltas only: this survives the engine's
-	// g_paintedtime rebases (32-bit chop, movie recording).
+	// m_buffersCompleted. Pure deltas keep normal playback aligned through
+	// the engine's whole-ring 32-bit time rebases.
 	const int nFramesPerBuffer = BUFFER_SIZE / ( DeviceSampleBytes() * DeviceChannels() );
-	return ( g_paintedtime - g_soundtime ) -
-		( (int)m_buffersCompleted - m_completedAtLastClockQuery ) * nFramesPerBuffer;
+	const uint32 nCompletedSinceQuery = CompletedBufferCount() - m_completedAtLastClockQuery;
+	return ( g_paintedtime - g_soundtime ) - (int)( nCompletedSinceQuery * nFramesPerBuffer );
 }
 
 
@@ -315,15 +323,8 @@ void CAudioDeviceAudioQueue::OpenWaveOut( void )
         Q_memset( m_Buffers[i]->mAudioData, 0, BUFFER_SIZE );
     }
 	
-    err = AudioQueuePrime( m_Queue, 0, NULL);
-	if ( err != noErr) 
-	{
-		DevMsg( "Failed to create AudioQueue output %d\n", (int)err );
-		m_bFailed = true;
-		CloseWaveOut( false );
-		return;
-	}
-	
+	// Prime only after PaintEnd has enqueued PCM. There is nothing to decode
+	// during queue creation (Apple documents enqueue -> prime -> start).
 	AudioQueueSetParameter( m_Queue, kAudioQueueParam_Volume, 1.0);
 	
 	err = AudioQueueAddPropertyListener( m_Queue, kAudioQueueProperty_IsRunning, AudioQueueIsRunningCallback, this );
@@ -351,6 +352,12 @@ void CAudioDeviceAudioQueue::OpenWaveOut( void )
 	if ( !m_sndBuffers )
 	{
 		m_sndBuffers = malloc( m_SndBufSize );
+		if ( !m_sndBuffers )
+		{
+			m_bFailed = true;
+			CloseWaveOut( false );
+			return;
+		}
 		memset( m_sndBuffers, 0x0, m_SndBufSize );
 	}
 }
@@ -363,24 +370,19 @@ void CAudioDeviceAudioQueue::CloseWaveOut( bool bFreeMixBuffer )
 { 
 	if ( m_Queue )
 	{
-		AudioQueueStop(m_Queue, true);
-		m_bRunning = 0;
-		
 		AudioQueueRemovePropertyListener( m_Queue, kAudioQueueProperty_IsRunning, AudioQueueIsRunningCallback, this );
 		AudioQueueRemovePropertyListener( m_Queue, kAudioQueueProperty_CurrentDevice, AudioQueueCurrentDeviceChangedCallback, this );
-		
-		for ( int i = 0; i < NUM_BUFFERS_SOURCES; i++ )
-		{
-			if ( m_Buffers[i] )
-			{
-				AudioQueueFreeBuffer( m_Queue, m_Buffers[i]);
-				m_Buffers[i] = NULL;
-			}
-		}
 
-		AudioQueueDispose( m_Queue, true);
-		
+		// Synchronous disposal stops callbacks and frees every queue buffer.
+		// Do not free buffers first: a failed AudioQueueStop would leave the
+		// queue still owning them. No callback can arrive after disposal.
+		AudioQueueDispose( m_Queue, true );
 		m_Queue = NULL;
+		Q_memset( m_Buffers, 0, sizeof( m_Buffers ) );
+		m_bRunning = 0;
+		// Account for discarded PCM even if reset did not need a callback for
+		// every buffer; the next queue starts at the submitted frontier.
+		m_buffersCompleted = m_buffersSent;
 	}
 	
 	if ( bFreeMixBuffer && m_sndBuffers )
@@ -388,6 +390,30 @@ void CAudioDeviceAudioQueue::CloseWaveOut( bool bFreeMixBuffer )
 		free( m_sndBuffers );
 		m_sndBuffers = NULL;
 	}
+}
+
+void CAudioDeviceAudioQueue::StopWaveOut( void )
+{
+	if ( m_Queue )
+	{
+		OSStatus err = AudioQueueStop( m_Queue, true );
+		if ( err != noErr )
+		{
+			DevMsg( "Failed to AudioQueueStop output %d\n", (int)err );
+			// Do not re-use buffers from a queue whose stop failed. Dispose it
+			// now and let PaintEnd recover when unpaused and off cooldown.
+			m_bFailed = true;
+			CloseWaveOut( false );
+		}
+		else
+		{
+			m_buffersCompleted = m_buffersSent;
+		}
+	}
+	m_bRunning = 0;
+	ResetQueuedBufferStateToPlayback();
+	m_lastObservedCompleted = CompletedBufferCount();
+	m_lastProgressTime = Plat_FloatTime();
 }
 
 bool CAudioDeviceAudioQueue::RecoverWaveOut( const char *pReason, OSStatus nError )
@@ -413,15 +439,10 @@ bool CAudioDeviceAudioQueue::RecoverWaveOut( const char *pReason, OSStatus nErro
 		DevMsg( "Recovering AudioQueue output after %s %d\n", pReason ? pReason : "unknown error", (int)nError );
 	}
 
-	ResetQueuedBufferStateToPlayback();
 	CloseWaveOut( false );
 	ResetQueuedBufferStateToPlayback();
 	OpenWaveOut();
-	// AudioQueueStop( ..., true ) in CloseWaveOut should deliver flush
-	// callbacks synchronously, but that isn't strictly guaranteed; sync once
-	// more after the rebuild so a late callback can't leave sent < completed.
-	ResetQueuedBufferStateToPlayback();
-	m_lastObservedCompleted = (int)m_buffersCompleted;
+	m_lastObservedCompleted = CompletedBufferCount();
 	m_lastProgressTime = Plat_FloatTime();
 
 	return ValidWaveOut() && !m_bFailed;
@@ -439,6 +460,12 @@ int CAudioDeviceAudioQueue::PaintBegin( float mixAheadTime, int soundtime, int p
 	//  endtime - target for samples in mixahead buffer at speed
 
 	unsigned int endtime = soundtime + mixAheadTime * DeviceDmaSpeed();
+	// At least one complete queue buffer is needed to start the clock. With
+	// snd_mixahead below 256/44100 seconds, neither playback nor the painted
+	// frontier could previously advance far enough to submit any audio.
+	const unsigned int nFramesPerBuffer = BUFFER_SIZE / ( DeviceSampleBytes() * DeviceChannels() );
+	if ( endtime - soundtime < nFramesPerBuffer )
+		endtime = soundtime + nFramesPerBuffer;
 	
 	int samps = DeviceSampleCount() >> (DeviceChannels()-1);
 
@@ -461,11 +488,22 @@ int CAudioDeviceAudioQueue::PaintBegin( float mixAheadTime, int soundtime, int p
 //-----------------------------------------------------------------------------
 void CAudioDeviceAudioQueue::PaintEnd( void )
 {
+	if ( m_pauseCount > 0 )
+		return;
+
 	if ( !ValidWaveOut() || m_bFailed )
 	{
-		RecoverWaveOut( "invalid queue" );
-		if ( !ValidWaveOut() || m_bFailed )
+		// This rebuild also services route changes already pending. Otherwise
+		// a failed device-change rebuild leaves a flag that forces another
+		// teardown immediately after the route finally becomes available.
+		// Consume before rebuilding so a newer callback remains pending.
+		int nPendingDeviceChange = m_bQueueDeviceChanged.InterlockedExchange( 0 );
+		if ( !RecoverWaveOut( "invalid queue" ) )
+		{
+			if ( nPendingDeviceChange != 0 )
+				m_bQueueDeviceChanged = 1;
 			return;
+		}
 	}
 
 	if ( m_bQueueDeviceChanged.InterlockedExchange( 0 ) != 0 )
@@ -479,7 +517,7 @@ void CAudioDeviceAudioQueue::PaintEnd( void )
 		}
 	}
 
-	int completed = (int)m_buffersCompleted;
+	uint32 completed = CompletedBufferCount();
 	if ( completed != m_lastObservedCompleted )
 	{
 		m_lastObservedCompleted = completed;
@@ -496,18 +534,9 @@ void CAudioDeviceAudioQueue::PaintEnd( void )
 			return;
 	}
 
-	if ( IsQueueRunning() && QueuedBufferCount() == 0 )
-	{
-		// We are running the audio queue but have become starved of buffers.
-		// Stop the audio queue so we force a restart of it.
-		OSStatus err = AudioQueueStop( m_Queue, true );
-		m_bRunning = 0;
-		if ( err != noErr )
-		{
-			if ( !RecoverWaveOut( "AudioQueueStop", err ) )
-				return;
-		}
-	}
+	// Returned buffers only indicate that CoreAudio acquired their contents.
+	// Even when all are reusable, PCM may still be waiting for the hardware.
+	// Refill the running queue instead of stopping and discarding that audio.
 
 	//
 	// submit a few new sound blocks, but never past the mixer's painted
@@ -518,7 +547,6 @@ void CAudioDeviceAudioQueue::PaintEnd( void )
 	// 44K sound support
 	const int cTargetQueuedBuffers = 16;
 	const int nFramesPerBuffer = BUFFER_SIZE / ( DeviceSampleBytes() * DeviceChannels() );
-	bool bRecoveredThisPaint = false;
 	while ( QueuedBufferCount() < cTargetQueuedBuffers &&
 		( QueuedBufferCount() + 1 ) * nFramesPerBuffer <= PaintedAheadFrames() )
 	{
@@ -532,15 +560,11 @@ void CAudioDeviceAudioQueue::PaintEnd( void )
 		if ( err != noErr)
 		{
 			DevMsg( "Failed to AudioQueueEnqueueBuffer output %d\n", (int)err );
-			// At most one rebuild per paint: if the fresh queue also refuses
-			// buffers, looping recover-and-retry here would hang the main
-			// thread rebuilding 128-buffer queues back to back.
-			if ( !bRecoveredThisPaint && RecoverWaveOut( "AudioQueueEnqueueBuffer", err ) )
-			{
-				bRecoveredThisPaint = true;
-				continue;
-			}
-			break;
+			// Latch failure even if recovery is declined by its cooldown. Do
+			// not retry the broken queue or start its partially queued audio.
+			m_bFailed = true;
+			RecoverWaveOut( "AudioQueueEnqueueBuffer", err );
+			return;
 		}
 
 		m_buffersSent++;
@@ -554,6 +578,7 @@ void CAudioDeviceAudioQueue::PaintEnd( void )
 		if ( err != noErr )
 		{
 			DevMsg( "Failed to AudioQueuePrime output %d\n", (int)err );
+			m_bFailed = true;
 			RecoverWaveOut( "AudioQueuePrime", err );
 			return;
 		}
@@ -562,10 +587,14 @@ void CAudioDeviceAudioQueue::PaintEnd( void )
 		if ( err == noErr )
 		{
 			m_bRunning = 1;
+			// A long pause must not spend the new route's entire stall grace.
+			m_lastObservedCompleted = CompletedBufferCount();
+			m_lastProgressTime = Plat_FloatTime();
 		}
 		else
 		{
 			DevMsg( "Failed to AudioQueueStart output %d\n", (int)err );
+			m_bFailed = true;
 			RecoverWaveOut( "AudioQueueStart", err );
 		}
 	}
@@ -574,7 +603,7 @@ void CAudioDeviceAudioQueue::PaintEnd( void )
 
 int CAudioDeviceAudioQueue::GetOutputPosition( void )
 {
-	int completed = (int)m_buffersCompleted;
+	uint32 completed = CompletedBufferCount();
 
 	// GetSoundTime() derives g_soundtime from this position; remember the
 	// completion count backing the engine's most recent clock sample so
@@ -582,13 +611,10 @@ int CAudioDeviceAudioQueue::GetOutputPosition( void )
 	// live completion count.
 	m_completedAtLastClockQuery = completed;
 
-	int s = completed * BUFFER_SIZE;
-
-	s >>= SAMPLE_16BIT_SHIFT;
-
-	s &= (DeviceSampleCount()-1);
-
-	return s / DeviceChannels();
+	// Mask before multiplying: completed * BUFFER_SIZE overflowed a signed
+	// int after about 3.4 hours. Only the position within one ring is needed.
+	const int nFramesPerBuffer = BUFFER_SIZE / ( DeviceSampleBytes() * DeviceChannels() );
+	return ( completed & BUFF_MASK ) * nFramesPerBuffer;
 }
 
 
@@ -600,14 +626,7 @@ void CAudioDeviceAudioQueue::Pause( void )
 	m_pauseCount++;
 	if (m_pauseCount == 1)
 	{
-		m_bRunning = 0;
-		if ( m_Queue )
-		{
-			AudioQueueStop(m_Queue, true);
-			ResetQueuedBufferStateToPlayback();
-			m_lastObservedCompleted = (int)m_buffersCompleted;
-			m_lastProgressTime = Plat_FloatTime();
-		}
+		StopWaveOut();
 	}
 }
 
@@ -760,14 +779,7 @@ void CAudioDeviceAudioQueue::SpatializeChannel( int volume[CCHANVOLUMES/2], int 
 void CAudioDeviceAudioQueue::StopAllSounds( void )
 {
 	m_bSoundsShutdown = true;
-	m_bRunning = 0;
-	if ( m_Queue )
-	{
-		AudioQueueStop(m_Queue, true);
-		ResetQueuedBufferStateToPlayback();
-		m_lastObservedCompleted = (int)m_buffersCompleted;
-		m_lastProgressTime = Plat_FloatTime();
-	}
+	StopWaveOut();
 }
 
 
@@ -825,5 +837,3 @@ void OnSndSurroundCvarChanged2( IConVar *pVar, const char *pOldString, float flO
 void OnSndSurroundLegacyChanged2( IConVar *pVar, const char *pOldString, float flOldValue )
 {
 }
-
-

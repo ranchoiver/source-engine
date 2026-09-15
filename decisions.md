@@ -74,3 +74,29 @@ A full review of the AudioUnit backend produced these fixes:
 - Sized `MaximumFramesPerSlice` to cover the device's actual I/O buffer instead of capping at 4096; an oversized render slice fails with `kAudioUnitErr_TooManyFramesToProcess` and the callback never runs.
 - Rate-limited `RecoverAudioUnit` to once per second and made `ServiceDeviceChanges` acknowledge only the device-change generation observed before the rebuild, so a change landing mid-recovery still triggers another pass.
 - Extended the verifier accordingly, including rejecting `#ifdef` probes of CoreAudio enum constants and requiring the barrier-published cursor.
+## 2026-09-14 behavioral review
+
+The current API interpretation and test instructions are documented in
+`HL2_BLUETOOTH_AUDIO_ROOT_CAUSE.md`. This review supersedes earlier claims that
+buffer callbacks prove audible playback or can arrive after synchronous queue
+disposal. Apple specifies buffer acquisition/reuse and a synchronous disposal
+boundary, respectively.
+
+- Removed the stop-on-zero-pending-buffers path: acquired PCM can still be
+  waiting for the speaker. A fake queue reproduces this by returning all buffer
+  callbacks during priming while retaining the PCM for playback.
+- Guaranteed a one-buffer mix budget for startup, moved priming after enqueue,
+  and made completion/submission arithmetic unsigned with interlocked reads.
+  Masking before frame conversion removes the 3.38-hour signed overflow.
+- Unified checked stop handling, disposed failed-stop queues before buffer
+  reuse, and let synchronous disposal free its own buffers.
+- Latched enqueue/prime/start failures through cooldown, renewed stall grace
+  after restart, and prevented PaintEnd from restarting a paused device.
+- A successful invalid-queue recovery consumes any already-pending route
+  request; a newer event during recovery remains pending. This avoids an extra
+  teardown just after an unavailable output route returns.
+- Added a harness that compiles the real backend against a deterministic fake
+  platform, including early callbacks and API failures. The dedicated workflow
+  also checks the backend against Apple's real SDK declarations on macOS,
+  retaining a minimal engine boundary. This does not replace native engine
+  compilation or Bluetooth listening tests.
