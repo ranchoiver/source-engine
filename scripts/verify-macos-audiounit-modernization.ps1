@@ -44,14 +44,14 @@ Assert-TextMatch $audioUnit 'kAudioHardwarePropertyPowerHint' 'Backend should op
 Assert-TextMatch $audioUnit 'kAudioHardwarePowerHintNone' 'Backend should prefer low-latency CoreAudio power policy.'
 Assert-TextMatch $audioUnit 'AudioObjectSetPropertyData\(\s*kAudioObjectSystemObject' 'Power hint must be applied through CoreAudio system object properties.'
 Assert-TextMatch $audioUnit 'RecoverAudioUnit\(\s*"CoreAudio device change"' 'Device changes must recover on the game thread.'
-Assert-TextMatch $audioUnit 'm_underrunCount\+\+' 'Underruns must be counted.'
+Assert-TextMatch $audioUnit 'm_underrunCount\.fetch_add' 'Underruns must be counted.'
 Assert-TextMatch $audioUnit 'SilenceOutput' 'Underruns and unsupported callback layouts must emit silence.'
 Assert-TextMatch $audioUnit 'S_TransferStereo16\(\s*m_sndBuffers' 'Backend must preserve Source mixer ring semantics.'
 Assert-TextMatch $audioUnit 'GetOutputPosition[\s\S]*m_renderedFrames' 'Playback clock must use frames rendered by the AudioUnit callback.'
 Assert-TextMatch $audioUnit 'FramesAvailableForHardware\(\)\s*>=\s*StartThresholdFrames\(\)' 'AudioUnit should wait for prefilled audio before starting.'
-Assert-TextMatch $audioUnit 'StartThresholdFrames[\s\S]{0,700}snd_mixahead' 'Start threshold must be clamped to the snd_mixahead prefill budget or the unit can never start.'
-Assert-TextMatch $audioUnit 'ThreadInterlockedExchangeAdd\(\s*&m_writtenFrames,\s*end\s*-\s*m_writtenFrames\s*\)' 'Ring write cursor must be published with a full barrier after S_TransferStereo16.'
-Assert-TextMatch $audioUnit 'ThreadInterlockedExchangeAdd\(\s*&m_writtenFrames,\s*0\s*\)' 'Render callback must read the write cursor with a full barrier, never g_paintedtime directly.'
+Assert-TextMatch $audioUnit 'StartThresholdFrames[\s\S]{0,700}m_mixBudgetFrames' 'Start threshold must fit the actual mixer budget.'
+Assert-TextMatch $audioUnit 'm_writtenFrames\.store\(\s*written,\s*std::memory_order_release' 'FIFO publication must release the completed PCM writes.'
+Assert-TextMatch $audioUnit 'm_writtenFrames\.load\(\s*std::memory_order_acquire' 'Render callback must acquire published PCM.'
 
 # CoreAudio property IDs and enum constants are not macros: #ifdef/#if defined()
 # on them is always false and silently compiles the guarded feature out.
@@ -74,8 +74,8 @@ if ($renderBody -match 'Audio(OutputUnit(Start|Stop)|Unit(Uninitialize|Initializ
     throw 'AudioUnit render callback must not perform device lifecycle, property, or listener work.'
 }
 
-if ($renderBody -notmatch 'm_renderedFrames\s*=\s*startFrame\s*\+\s*requestedFrames') {
-    throw 'Render callback must advance the rendered frame clock with a single monotonic store.'
+if ($renderBody -notmatch 'm_renderedFrames\.store\(\s*read\s*\+\s*copied,\s*std::memory_order_release') {
+    throw 'Render callback must release consumed slots after copying PCM.'
 }
 
 if ($renderBody -match 'g_paintedtime') {
@@ -117,5 +117,5 @@ Assert-TextMatch $rootWscript 'FRAMEWORK_AUDIOUNIT\s*=\s*"AudioUnit"' 'Root Waf 
 Assert-TextMatch $engineVpc 'snd_dev_mac_audiounit\.cpp' 'VPC must include the AudioUnit backend source on macOS.'
 Assert-TextMatch $engineVpc '\$SystemFrameworks[^\r\n]*AudioUnit' 'VPC must link the AudioUnit framework.'
 
-Write-Host 'Verified macOS AudioUnit modernization invariants.'
-Write-Host 'AudioUnit is default before AudioQueue fallback; render callback is pull-based, route-aware, and real-time safe.'
+Write-Host 'Verified supplemental AudioUnit source and build wiring patterns.'
+Write-Host 'Run scripts/test-audiounit.py for behavioral tests; source patterns do not establish runtime correctness.'

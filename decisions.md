@@ -100,3 +100,26 @@ boundary, respectively.
   also checks the backend against Apple's real SDK declarations on macOS,
   retaining a minimal engine boundary. This does not replace native engine
   compilation or Bluetooth listening tests.
+
+## 2026-09-15 AudioUnit correctness review
+
+- Integrated PR #2 commit `7a0926a` into the stacked AudioUnit branch.
+- Replaced shared absolute-timeline ring access with an explicit SPSC PCM FIFO
+  and release/acquire ownership in both directions. The original transfer and
+  recording remain on the mixer thread, with one bounded extra PCM copy.
+- The output cursor now counts consumed PCM, excluding underrun silence. This
+  supersedes the earlier rendered-including-silence/resynchronization policy.
+  Neither counter is a DAC/Bluetooth presentation timestamp.
+- Re-anchor FIFO state to Source's sampled soundtime on timeline resets; honor
+  the engine's ClearBuffer-before-StopAllSounds order, skip catch-up PCM, and
+  resume live mixing correctly after offline movie/replay recording.
+- Bound callback writes by advertised capacity; preallocate storage for null
+  data pointers using the unit's post-initialization maximum slice size.
+- Check failed stops, latch failed starts, detect missing callbacks separately
+  from ordinary underruns, and retain new route events during recovery.
+- Listener notifications use process-lifetime atomic storage so a queued late
+  callback cannot dereference a deleted backend.
+- Add production-source behavioral and concurrency tests, sanitizers, bounded
+  callback checks, and a targeted Linux/macOS workflow with real Apple SDK
+  syntax checks for arm64 and x86_64. Native game/listening validation remains
+  necessary; mock-platform timing is not measured device latency.
