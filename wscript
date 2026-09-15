@@ -378,6 +378,7 @@ def check_deps(conf):
 		conf.env.FRAMEWORK_CORESERVICES = "CoreServices"
 		conf.env.FRAMEWORK_COREAUDIO = "CoreAudio"
 		conf.env.FRAMEWORK_AUDIOTOOLBOX = "AudioToolbox"
+		conf.env.FRAMEWORK_AUDIOUNIT = "AudioUnit"
 		conf.env.FRAMEWORK_SYSTEMCONFIGURATION = "SystemConfiguration"
 
 	if conf.options.TESTS:

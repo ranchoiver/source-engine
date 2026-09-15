@@ -1,0 +1,48 @@
+name: AudioUnit regression
+on:
+  pull_request:
+    paths:
+      - 'engine/audio/snd_dev_mac_audiounit.cpp'
+      - 'engine/audio/snd_win.cpp'
+      - 'scripts/test-audiounit.py'
+      - 'scripts/benchmark-audiounit.py'
+      - 'scripts/tests/audiounit/**'
+      - 'scripts/tests/audioqueue/**'
+      - '.github/workflows/audiounit-regression.yml'
+  push:
+    paths:
+      - 'engine/audio/snd_dev_mac_audiounit.cpp'
+      - 'engine/audio/snd_win.cpp'
+      - 'scripts/test-audiounit.py'
+      - 'scripts/benchmark-audiounit.py'
+      - 'scripts/tests/audiounit/**'
+      - 'scripts/tests/audioqueue/**'
+      - '.github/workflows/audiounit-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: AudioUnit address and undefined behavior checks
+        run: python3 scripts/test-audiounit.py --sanitize
+      - name: Concurrent PCM transport with ThreadSanitizer
+        run: python3 scripts/test-audiounit.py --thread-sanitize --test spsc-stress
+      - name: Integrated AudioQueue fallback regressions
+        run: python3 scripts/test-audioqueue-recovery.py --sanitize
+      - name: Compile with real Apple SDK for Apple Silicon and Intel
+        if: runner.os == 'macOS'
+        run: python3 scripts/test-audiounit.py --native-syntax
+      - name: Informational transport comparison against reviewed baseline
+        run: |
+          git fetch --no-tags --depth=1 origin 84a5813182c10d7333bd029bdb531bb349fc8dd5
+          python3 scripts/benchmark-audiounit.py --repetitions 7
