@@ -11,6 +11,8 @@ sampler BaseTextureSampler : register( s0 );
 
 float4 CryostasisBlurParams : register( c0 ); // xy blur texel step, zw source active-region scale
 
+float4 CryostasisBlurBounds : register( c1 ); // xy minimum UV, zw maximum UV
+
 struct PS_INPUT
 {
 	float2 baseTexCoord : TEXCOORD0;
@@ -18,7 +20,7 @@ struct PS_INPUT
 
 float4 CryostasisSampleTexture( sampler texSampler, float2 uv )
 {
-	float4 color = tex2D( texSampler, uv );
+	float4 color = tex2D( texSampler, clamp( uv, CryostasisBlurBounds.xy, CryostasisBlurBounds.zw ) );
 
 	#if ( APPROX_SRGB_ADAPTER == 1 )
 	{

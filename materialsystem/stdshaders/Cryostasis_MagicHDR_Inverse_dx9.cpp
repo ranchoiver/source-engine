@@ -48,11 +48,10 @@ BEGIN_VS_SHADER_FLAGS( Cryostasis_MagicHDR_Inverse_dx9, "HL2 Cryostasis MagicHDR
 			pShaderShadow->EnableAlphaWrites( true );
 			pShaderShadow->EnableTexture( SHADER_SAMPLER0, true );
 
-			// Sample the framebuffer copy raw (gamma bytes on every platform,
-			// exactly what ReShade saw) and write raw HDR values to the
-			// float16 bloom RT - no sRGB conversion anywhere, so the
-			// APPROX_SRGB_ADAPTER combo stays off on all platforms.
-			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER0, false );
+			// OSX may force sRGB decoding for renderable textures. Match
+			// engine_post's input conversion; the float16 OUTPUT stays raw.
+			const bool bLinearInput = IsOSX() && g_pHardwareConfig->CanDoSRGBReadFromRTs();
+			pShaderShadow->EnableSRGBRead( SHADER_SAMPLER0, bLinearInput );
 			pShaderShadow->EnableSRGBWrite( false );
 			pShaderShadow->VertexShaderVertexFormat( VERTEX_POSITION, 1, NULL, 0 );
 
@@ -61,7 +60,7 @@ BEGIN_VS_SHADER_FLAGS( Cryostasis_MagicHDR_Inverse_dx9, "HL2 Cryostasis MagicHDR
 
 			DECLARE_STATIC_PIXEL_SHADER( cryostasis_magichdr_inverse_ps20b );
 #ifndef _X360
-			SET_STATIC_PIXEL_SHADER_COMBO( APPROX_SRGB_ADAPTER, 0 );
+			SET_STATIC_PIXEL_SHADER_COMBO( APPROX_SRGB_ADAPTER, bLinearInput );
 #endif
 			SET_STATIC_PIXEL_SHADER( cryostasis_magichdr_inverse_ps20b );
 		}

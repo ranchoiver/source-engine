@@ -370,8 +370,8 @@ Write-Host "Compiled dynamic combos: $compiledCombos across $staticCombos static
 # ---------------------------------------------------------------------------
 # cryostasis_magichdr_inverse_ps20b / cryostasis_magichdr_blur_ps20b:
 # 2 static combos each (APPROX_SRGB_ADAPTER 0..1), 1 dynamic combo,
-# mirroring their fxctmp9 .inc index math. The adapter combo is compiled for
-# completeness but the runtime always selects 0 (the chain uses float16 RTs).
+# mirroring their fxctmp9 .inc index math. Inverse selects adapter 1 when
+# OSX forces framebuffer sRGB reads; blur always selects 0 for raw float16.
 # ---------------------------------------------------------------------------
 
 $magicHdrShaders = @(

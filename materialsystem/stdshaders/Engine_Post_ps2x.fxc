@@ -124,6 +124,9 @@ float4	CryostasisInternal3			: register( c8 ); // x unused (bloom brightness is 
 float4	CryostasisInternal4			: register( c9 ); // x AmbientLight intensity, y threshold, z dirt, w dirt overlay
 float4	CryostasisInternal5			: register( c10 ); // x focus depth, y focus range, z focus edge, w effect factor
 
+// c11-c17: xy active-region scale, zw half a physical texel.
+float4 CryostasisBloomRegions[7] : register( c11 );
+
 float4 GetBloomColor( float2 bloomUV )
 {
 	#if ( LINEAR_INPUT == 1 )
@@ -504,6 +507,11 @@ float3 CryostasisPandaFX( float3 color, float intensity )
 	return lerp( original, graded, saturate( CryostasisInternal1.z * intensity ) );
 }
 
+float3 CryostasisSampleBloom( sampler bloomSampler, float2 uv, float4 region )
+{
+	return tex2D( bloomSampler, clamp( uv * region.xy, region.zw, region.xy - region.zw ) ).rgb;
+}
+
 float3 CryostasisMagicHDR( float3 color, float2 bloomUV, float intensity )
 {
 	// The LOD chain lives in float16 RTs holding raw inverse-tonemapped HDR
@@ -511,13 +519,13 @@ float3 CryostasisMagicHDR( float3 color, float2 bloomUV, float intensity )
 	// the taps need no color-space adaptation on any platform. Weights are
 	// MagicHDR's NormalDistribution( i, 5.6, 3.5 ) / 7.
 	float3 bloom = 0.0f;
-	bloom += tex2D( CryostasisBloom0Sampler, bloomUV ).rgb * 0.0068652342f;
-	bloom += tex2D( CryostasisBloom1Sampler, bloomUV * 0.5f ).rgb * 0.0095942507f;
-	bloom += tex2D( CryostasisBloom2Sampler, bloomUV * 0.25f ).rgb * 0.0123570316f;
-	bloom += tex2D( CryostasisBloom3Sampler, bloomUV * 0.125f ).rgb * 0.0146677885f;
-	bloom += tex2D( CryostasisBloom4Sampler, bloomUV * 0.0625f ).rgb * 0.0160458420f;
-	bloom += tex2D( CryostasisBloom5Sampler, bloomUV * 0.03125f ).rgb * 0.0161773646f;
-	bloom += tex2D( CryostasisBloom6Sampler, bloomUV * 0.015625f ).rgb * 0.0150314343f;
+	bloom += CryostasisSampleBloom( CryostasisBloom0Sampler, bloomUV, CryostasisBloomRegions[0] ) * 0.0068652342f;
+	bloom += CryostasisSampleBloom( CryostasisBloom1Sampler, bloomUV, CryostasisBloomRegions[1] ) * 0.0095942507f;
+	bloom += CryostasisSampleBloom( CryostasisBloom2Sampler, bloomUV, CryostasisBloomRegions[2] ) * 0.0123570316f;
+	bloom += CryostasisSampleBloom( CryostasisBloom3Sampler, bloomUV, CryostasisBloomRegions[3] ) * 0.0146677885f;
+	bloom += CryostasisSampleBloom( CryostasisBloom4Sampler, bloomUV, CryostasisBloomRegions[4] ) * 0.0160458420f;
+	bloom += CryostasisSampleBloom( CryostasisBloom5Sampler, bloomUV, CryostasisBloomRegions[5] ) * 0.0161773646f;
+	bloom += CryostasisSampleBloom( CryostasisBloom6Sampler, bloomUV, CryostasisBloomRegions[6] ) * 0.0150314343f;
 
 	float3 hdrColor = CryostasisReinhardInverse( saturate( color ) );
 	float3 merged = lerp( hdrColor, bloom, saturate( CryostasisInternal1.w * intensity ) );
@@ -527,7 +535,7 @@ float3 CryostasisMagicHDR( float3 color, float2 bloomUV, float intensity )
 
 float3 CryostasisEmphasize( float3 color, float2 fbTexCoord, float intensity )
 {
-	// On PC the full-frame "depth" texture is a framebuffer copy whose
+	// The private opaque snapshot is a framebuffer copy whose
 	// DESTINATION ALPHA holds linear view depth / DestAlphaDepthRange (the
 	// color channels are scene color, never depth). CryostasisInternal3.y
 	// rescales that onto ReShade's depth convention (fraction of the 1000
@@ -615,7 +623,7 @@ float4 main( PS_INPUT i ) : COLOR
 		// disabled while Cryostasis is active, freeing s2-s4 for dirt and
 		// s15 for the gamma table.)
 		float3 cryoBase = saturate( outColor.rgb + bloomColor.rgb );
-		outColor.rgb = CryostasisPostProcess( cryoBase, bloomColor.rgb, fbTexCoord, i.baseTexCoord );
+		outColor.rgb = CryostasisPostProcess( cryoBase, bloomColor.rgb, fbTexCoord, fbTexCoord );
 	}
 	#else
 	{

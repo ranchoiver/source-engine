@@ -28,19 +28,13 @@ float3 CryostasisReinhardInverse( float3 color )
 	return -( color / min( color - 1.0f, -0.1f ) );
 }
 
-float3 CryostasisApproxLinearToGamma( float3 color )
-{
-	color = max( color, 0.00001f );
-	return color * rsqrt( color );
-}
-
 float4 main( PS_INPUT i ) : COLOR
 {
 	float4 color = tex2D( BaseTextureSampler, i.baseTexCoord );
 
 	#if ( APPROX_SRGB_ADAPTER == 1 )
 	{
-		color.rgb = CryostasisApproxLinearToGamma( color.rgb );
+		color.rgb = LinearToGamma( max( color.rgb, 0.0f ) );
 	}
 	#endif
 
@@ -52,11 +46,7 @@ float4 main( PS_INPUT i ) : COLOR
 	color.rgb = CryostasisReinhardInverse( color.rgb );
 	color.rgb *= CryostasisMagicHDRParams.x;
 
-	#if ( APPROX_SRGB_ADAPTER == 1 )
-	{
-		color.rgb *= color.rgb;
-	}
-	#endif
+	// Float16 destination: do not gamma-encode or square HDR output.
 
 	return float4( max( color.rgb, 0.0f ), 1.0f );
 }

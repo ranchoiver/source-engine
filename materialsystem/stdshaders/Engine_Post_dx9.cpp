@@ -6,6 +6,7 @@
 //=============================================================================
 
 #include "BaseVSShader.h"
+#include "materialsystem/cryostasis_helpers.h"
 
 #include "screenspaceeffect_vs20.inc"
 #include "engine_post_ps20.inc"
@@ -23,6 +24,7 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 		SHADER_PARAM( AAINTERNAL2,				SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal anti-aliasing values set via material proxy" )
 		SHADER_PARAM( AAINTERNAL3,				SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal anti-aliasing values set via material proxy" )
 		SHADER_PARAM( BLOOMENABLE,				SHADER_PARAM_TYPE_BOOL,		"1",				"Enable bloom" )
+		SHADER_PARAM( CRYOSTASISDEPTH, SHADER_PARAM_TYPE_TEXTURE, "_rt_CryostasisDepth", "Private opaque depth snapshot" )
 		SHADER_PARAM( CRYOSTASISENABLE,			SHADER_PARAM_TYPE_BOOL,		"0",				"Enable HL2 Cryostasis ReShade post-processing" )
 		SHADER_PARAM( CRYOSTASISINTERNAL1,		SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal Cryostasis values set via material proxy" )
 		SHADER_PARAM( CRYOSTASISINTERNAL2,		SHADER_PARAM_TYPE_VEC4,		"[0 0 0 0]",		"Internal Cryostasis values set via material proxy" )
@@ -105,6 +107,10 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 		if ( params[FBTEXTURE]->IsDefined() )
 		{
 			LoadTexture( FBTEXTURE );
+		}
+		if ( params[CRYOSTASISDEPTH]->IsDefined() )
+		{
+			LoadTexture( CRYOSTASISDEPTH );
 		}
 		if ( params[CRYOSTASISBLOOM0]->IsDefined() )
 		{
@@ -320,7 +326,7 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 				BindTexture( SHADER_SAMPLER2, CRYOSTASISDIRT, -1 );
 				BindTexture( SHADER_SAMPLER3, CRYOSTASISDIRTOVR, -1 );
 				BindTexture( SHADER_SAMPLER4, CRYOSTASISDIRTOVB, -1 );
-				pShaderAPI->BindStandardTexture( SHADER_SAMPLER6, TEXTURE_FRAME_BUFFER_FULL_DEPTH );
+				BindTexture( SHADER_SAMPLER6, CRYOSTASISDEPTH, -1 );
 				BindTexture( SHADER_SAMPLER7, CRYOSTASISBLOOM1, -1 );
 				BindTexture( SHADER_SAMPLER8, CRYOSTASISBLOOM2, -1 );
 				BindTexture( SHADER_SAMPLER9, CRYOSTASISBLOOM3, -1 );
@@ -328,6 +334,11 @@ BEGIN_VS_SHADER_FLAGS( Engine_Post_dx9, "Engine post-processing effects (softwar
 				BindTexture( SHADER_SAMPLER11, CRYOSTASISBLOOM5, -1 );
 				BindTexture( SHADER_SAMPLER12, CRYOSTASISBLOOM6, -1 );
 				BindTexture( SHADER_SAMPLER13, CRYOSTASISBLOOM0, -1 );
+				float regions[Cryostasis::BloomLevels][4];
+				ITexture *pBloom = params[CRYOSTASISBLOOM0]->GetTextureValue();
+				for ( int i = 0; i < Cryostasis::BloomLevels; ++i )
+					Cryostasis::BloomRegion( pBloom->GetActualWidth(), pBloom->GetActualHeight(), i, regions[i] );
+				pShaderAPI->SetPixelShaderConstant( 11, regions[0], Cryostasis::BloomLevels );
 			}
 
 			if ( !colCorrectEnabled )

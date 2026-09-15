@@ -13,6 +13,7 @@ DEFINE_FALLBACK_SHADER( Cryostasis_MagicHDR_Blur, Cryostasis_MagicHDR_Blur_dx9 )
 BEGIN_VS_SHADER_FLAGS( Cryostasis_MagicHDR_Blur_dx9, "HL2 Cryostasis MagicHDR gaussian bloom blur", SHADER_NOT_EDITABLE )
 	BEGIN_SHADER_PARAMS
 		SHADER_PARAM( CRYOSTASISBLURPARAMS, SHADER_PARAM_TYPE_VEC4, "[0 0 1 1]", "xy blur texel step, zw source active-region scale" )
+		SHADER_PARAM( CRYOSTASISBLURBOUNDS, SHADER_PARAM_TYPE_VEC4, "[0 0 1 1]", "xy first texel center, zw last texel center" )
 	END_SHADER_PARAMS
 
 	SHADER_INIT_PARAMS()
@@ -69,6 +70,7 @@ BEGIN_VS_SHADER_FLAGS( Cryostasis_MagicHDR_Blur_dx9, "HL2 Cryostasis MagicHDR ga
 		{
 			BindTexture( SHADER_SAMPLER0, BASETEXTURE, -1 );
 			pShaderAPI->SetPixelShaderConstant( 0, params[CRYOSTASISBLURPARAMS]->GetVecValue(), 1 );
+			pShaderAPI->SetPixelShaderConstant( 1, params[CRYOSTASISBLURBOUNDS]->GetVecValue(), 1 );
 
 			DECLARE_DYNAMIC_VERTEX_SHADER( screenspaceeffect_vs20 );
 			SET_DYNAMIC_VERTEX_SHADER( screenspaceeffect_vs20 );

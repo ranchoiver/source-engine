@@ -98,6 +98,7 @@ static CTextureReference g_FullFrameDepth;
 static CTextureReference g_ResolvedFullFrameDepth;
 static CTextureReference g_CryostasisBloomTexture[7];
 static CTextureReference g_CryostasisTempTexture;
+static CTextureReference g_CryostasisDepthTexture;
 
 void WorldStaticMeshCreate( void );
 void WorldStaticMeshDestroy( void );
@@ -1105,7 +1106,7 @@ static ITexture *CreateCryostasisQuarterSizedFBTexture( const char *pTextureName
 	// Always float16: the MagicHDR chain stores inverse-tonemapped HDR values
 	// (up to ~78 with the preset's exp(2.055) brightness). An 8-bit RT clips
 	// them to 1.0 and reduces the whole bloom stage to a white-clip mask.
-	// ps_2_b-era hardware (D3D9 and macOS GL) supports float16 RTs, and raw
+	// Allocation is gated on filterable float HDR support. Raw
 	// float storage also removes every sRGB encode/decode concern from the
 	// chain.
 	return materials->CreateNamedRenderTargetTextureEx2(
@@ -1119,7 +1120,8 @@ static bool ShouldCreateCryostasisRenderTargets()
 {
 	return IsPC() &&
 		g_pMaterialSystemHardwareConfig->GetDXSupportLevel() >= 90 &&
-		g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b();
+		g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b() &&
+		g_pMaterialSystemHardwareConfig->SupportsHDRMode( HDR_TYPE_FLOAT );
 }
 
 static ITexture *CreateFullFrameFBTexture( int textureIndex, int iExtraFlags = 0 )
@@ -1253,6 +1255,10 @@ void InitWellKnownRenderTargets( void )
 		}
 
 		g_CryostasisTempTexture.Init( CreateCryostasisQuarterSizedFBTexture( "_rt_CryostasisTemp" ) );
+		g_CryostasisDepthTexture.Init( materials->CreateNamedRenderTargetTextureEx2(
+			"_rt_CryostasisDepth", 1, 1, RT_SIZE_FULL_FRAME_BUFFER, materials->GetBackBufferFormat(),
+			MATERIAL_RT_DEPTH_NONE, TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_POINTSAMPLE,
+			CREATERENDERTARGETFLAGS_HDR ) );
 	}
 
 	g_FullFrameFBTexture0.Init( CreateFullFrameFBTexture( 0 ) );
@@ -1332,6 +1338,7 @@ void ShutdownWellKnownRenderTargets( void )
 		g_CryostasisBloomTexture[i].Shutdown();
 	}
 	g_CryostasisTempTexture.Shutdown();
+	g_CryostasisDepthTexture.Shutdown();
 	g_FullFrameFBTexture0.Shutdown();
 	g_FullFrameFBTexture1.Shutdown();
 	if ( IsX360() )

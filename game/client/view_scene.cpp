@@ -10,6 +10,7 @@
 #include "materialsystem/imaterialsystemhardwareconfig.h"
 #include "rendertexture.h"
 #include "view_scene.h"
+#include "viewpostprocess.h"
 #include "viewrender.h"
 #include "sourcevr/isourcevirtualreality.h"
 #include "client_virtualreality.h"
@@ -131,6 +132,7 @@ void UpdateFullScreenDepthTexture( void )
 		pRenderContext->CopyRenderTargetToTextureEx( pDepthTex, 0, NULL, NULL );
 	}
 
+	CaptureCryostasisDepthTexture();
 	pRenderContext->SetFullScreenDepthTextureValidityFlag( true );
 
 	if( r_depthoverlay.GetBool() )
