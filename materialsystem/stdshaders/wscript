@@ -38,6 +38,8 @@ def build(bld):
 		'compositor.cpp',
 		'core_dx9.cpp',
 		'color_projection.cpp',
+		'Cryostasis_MagicHDR_Blur_dx9.cpp',
+		'Cryostasis_MagicHDR_Inverse_dx9.cpp',
 		'debugmrttexture.cpp',
 		#'debugmorphaccumulator_dx9.cpp',					[$WIN32]
 		'DebugTextureView.cpp',

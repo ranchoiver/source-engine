@@ -11,7 +11,11 @@
 #include "materialsystem/imaterialvar.h"
 #include "materialsystem/imaterialsystemhardwareconfig.h"
 #include "materialsystem/materialsystem_config.h"
+#include "materialsystem/cryostasis_helpers.h"
+#include "viewpostprocess.h"
+#include "viewrender.h"
 #include "tier1/callqueue.h"
+#include "tier1/KeyValues.h"
 #include "colorcorrectionmgr.h"
 #include "view_scene.h"
 #include "c_world.h"
@@ -339,6 +343,15 @@ static void SetRenderTargetAndViewPort(ITexture *rt)
 	CMatRenderContextPtr pRenderContext( materials );
 	pRenderContext->SetRenderTarget(rt);
 	pRenderContext->Viewport(0,0,rt->GetActualWidth(),rt->GetActualHeight());
+}
+
+static void SetRenderTargetAndViewPort(ITexture *rt, int nWidth, int nHeight)
+{
+	tmZone( TELEMETRY_LEVEL0, TMZF_NONE, "%s", __FUNCTION__ );
+
+	CMatRenderContextPtr pRenderContext( materials );
+	pRenderContext->SetRenderTarget(rt);
+	pRenderContext->Viewport(0,0,nWidth,nHeight);
 }
 
 #define FILTER_KERNEL_SLOP 20
@@ -1133,6 +1146,26 @@ static ConVar mat_cryostasis_bloom_scale( "mat_cryostasis_bloom_scale", "2.25", 
 static ConVar mat_cryostasis_bloom_scalar( "mat_cryostasis_bloom_scalar", "1.65", FCVAR_ARCHIVE, "Final bloom multiplier used while the HL2 Cryostasis ReShade preset is active.", true, 0.0f, true, 4.0f );
 static ConVar mat_cryostasis_tonemap_scale( "mat_cryostasis_tonemap_scale", "1.25", FCVAR_ARCHIVE, "Forced tonemap scale used while the HL2 Cryostasis ReShade preset is active.", true, 0.0f, true, 4.0f );
 
+static const char *s_pCryostasisBloomTextureNames[] =
+{
+	"_rt_CryostasisBloom0",
+	"_rt_CryostasisBloom1",
+	"_rt_CryostasisBloom2",
+	"_rt_CryostasisBloom3",
+	"_rt_CryostasisBloom4",
+	"_rt_CryostasisBloom5",
+	"_rt_CryostasisBloom6",
+};
+
+static bool CanRunCryostasisPostProcess()
+{
+	return IsPC() &&
+		engine->GetDXSupportLevel() >= 90 &&
+		g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b() &&
+		g_pMaterialSystemHardwareConfig->SupportsHDRMode( HDR_TYPE_FLOAT ) &&
+		g_pMaterialSystemHardwareConfig->GetHDRType() != HDR_TYPE_FLOAT;
+}
+
 struct CryostasisPostProcessSnapshot_t
 {
 	bool m_bValid;
@@ -1231,13 +1264,9 @@ static void RestoreCryostasisPostProcessSnapshot()
 
 static void ApplyCryostasisPostProcessPreset( float flIntensity )
 {
-	// The shader stack only exists in ps_2_b combos; on ps20-only hardware the
-	// convar changes below would restyle bloom/tonemapping with no Cryostasis
-	// pass to match.
-	if ( !g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b() &&
-		!g_pMaterialSystemHardwareConfig->ShouldAlwaysUseShaderModel2bShaders() )
+	if ( !CanRunCryostasisPostProcess() )
 	{
-		ConMsg( "hl2_cryostasis: not supported on this hardware (requires ps_2_b shaders).\n" );
+		ConMsg( "hl2_cryostasis: requires PC ps_2_b, filterable float16 render targets, and LDR or integer HDR mode.\n" );
 		return;
 	}
 
@@ -1285,6 +1314,169 @@ static void PrintCryostasisPostProcessStatus()
 		mat_cryostasis_tonemap_scale.GetFloat() );
 	ConMsg( "  shader: AmbientLight, Curves, PandaFX, MagicHDR, Emphasize\n" );
 	ConMsg( "  use: hl2_cryostasis <0..2|on|off|toggle|reset|status>\n" );
+}
+
+static IMaterial *CreateCryostasisGeneratedMaterial( const char *pMaterialName, const char *pShaderName )
+{
+	KeyValues *pVMTKeyValues = new KeyValues( pShaderName );
+	pVMTKeyValues->SetString( "$basetexture", "_rt_FullFrameFB" );
+	return materials->CreateMaterial( pMaterialName, pVMTKeyValues );
+}
+
+static IMaterial *GetCryostasisMagicHDRInverseMaterial()
+{
+	static IMaterial *s_pMaterial = NULL;
+	if ( !s_pMaterial )
+	{
+		s_pMaterial = CreateCryostasisGeneratedMaterial( "__cryostasis_magichdr_inverse", "Cryostasis_MagicHDR_Inverse" );
+	}
+	return s_pMaterial;
+}
+
+static IMaterial *GetCryostasisMagicHDRBlurMaterial()
+{
+	static IMaterial *s_pMaterial = NULL;
+	if ( !s_pMaterial )
+	{
+		s_pMaterial = CreateCryostasisGeneratedMaterial( "__cryostasis_magichdr_blur", "Cryostasis_MagicHDR_Blur" );
+	}
+	return s_pMaterial;
+}
+
+static void SetCryostasisMaterialTexture( IMaterial *pMaterial, ITexture *pTexture )
+{
+	bool bFoundVar = false;
+	IMaterialVar *pBaseTextureVar = pMaterial->FindVar( "$basetexture", &bFoundVar, false );
+	if ( bFoundVar && pBaseTextureVar )
+	{
+		pBaseTextureVar->SetTextureValue( pTexture );
+	}
+}
+
+static void SetCryostasisMaterialVec4( IMaterial *pMaterial, const char *pVarName, float x, float y, float z, float w )
+{
+	bool bFoundVar = false;
+	IMaterialVar *pVar = pMaterial->FindVar( pVarName, &bFoundVar, false );
+	if ( bFoundVar && pVar )
+	{
+		pVar->SetVecValue( x, y, z, w );
+	}
+}
+
+// Kept separate from the shared refraction/depth alias: refraction overwrites
+// _rt_PowerOfTwoFB after opaques, before engine_post samples Emphasize depth.
+static bool s_bCryostasisDepthValid = false;
+
+void InvalidateCryostasisDepthTexture()
+{
+	s_bCryostasisDepthValid = false;
+}
+
+void CaptureCryostasisDepthTexture()
+{
+	if ( CurrentViewID() != VIEW_MAIN || !s_bCryostasisPostProcessActive || !CanRunCryostasisPostProcess() )
+		return;
+
+	s_bCryostasisDepthValid = false;
+	ITexture *pDepth = materials->FindTexture( "_rt_CryostasisDepth", TEXTURE_GROUP_RENDER_TARGET );
+	if ( IsErrorTexture( pDepth ) )
+		return;
+
+	CMatRenderContextPtr pRenderContext( materials );
+	Rect_t src;
+	pRenderContext->GetViewport( src.x, src.y, src.width, src.height );
+	if ( src.width <= 0 || src.height <= 0 )
+		return;
+
+	// Match UpdateScreenEffectTexture's viewport-to-full-texture mapping.
+	// No extra copy occurs while the preset is off.
+	pRenderContext->CopyRenderTargetToTextureEx( pDepth, 0, &src, NULL );
+	s_bCryostasisDepthValid = true;
+}
+
+static void DrawCryostasisPostPass( IMatRenderContext *pRenderContext, IMaterial *pMaterial, int nDestWidth, int nDestHeight, ITexture *pSourceTexture )
+{
+	const int width = pSourceTexture->GetActualWidth();
+	const int height = pSourceTexture->GetActualHeight();
+	pRenderContext->DrawScreenSpaceRectangle(
+		pMaterial, 0, 0, nDestWidth, nDestHeight,
+		Cryostasis::FirstSourceTexel( width, nDestWidth ),
+		Cryostasis::FirstSourceTexel( height, nDestHeight ),
+		Cryostasis::LastSourceTexel( width, nDestWidth ),
+		Cryostasis::LastSourceTexel( height, nDestHeight ), width, height );
+}
+
+static bool GenerateCryostasisMagicHDRBloomTextures( IMatRenderContext *pRenderContext )
+{
+	if ( !CanRunCryostasisPostProcess() )
+		return false;
+
+	ITexture *pSource = materials->FindTexture( "_rt_FullFrameFB", TEXTURE_GROUP_RENDER_TARGET );
+	ITexture *pTemp = materials->FindTexture( "_rt_CryostasisTemp", TEXTURE_GROUP_RENDER_TARGET );
+	ITexture *pBloom[ARRAYSIZE( s_pCryostasisBloomTextureNames )];
+
+	if ( IsErrorTexture( pSource ) || IsErrorTexture( pTemp ) )
+		return false;
+
+	for ( int i = 0; i < ARRAYSIZE( pBloom ); ++i )
+	{
+		pBloom[i] = materials->FindTexture( s_pCryostasisBloomTextureNames[i], TEXTURE_GROUP_RENDER_TARGET );
+		if ( IsErrorTexture( pBloom[i] ) )
+			return false;
+	}
+
+	IMaterial *pInverseMaterial = GetCryostasisMagicHDRInverseMaterial();
+	IMaterial *pBlurMaterial = GetCryostasisMagicHDRBlurMaterial();
+	if ( IsErrorMaterial( pInverseMaterial ) || IsErrorMaterial( pBlurMaterial ) )
+		return false;
+
+	const int nBloomWidth = pBloom[0]->GetActualWidth();
+	const int nBloomHeight = pBloom[0]->GetActualHeight();
+	if ( nBloomWidth <= 0 || nBloomHeight <= 0 ||
+		pTemp->GetActualWidth() != nBloomWidth || pTemp->GetActualHeight() != nBloomHeight )
+		return false;
+	for ( int i = 0; i < ARRAYSIZE( pBloom ); ++i )
+	{
+		if ( pBloom[i]->GetActualWidth() != nBloomWidth || pBloom[i]->GetActualHeight() != nBloomHeight ||
+			pBloom[i]->GetImageFormat() != IMAGE_FORMAT_RGBA16161616F )
+			return false;
+	}
+	if ( pTemp->GetImageFormat() != IMAGE_FORMAT_RGBA16161616F )
+		return false;
+
+	pRenderContext->PushRenderTargetAndViewport();
+
+	SetCryostasisMaterialTexture( pInverseMaterial, pSource );
+	SetCryostasisMaterialVec4( pInverseMaterial, "$cryostasisMagicHDRParams", 7.806838f, 0.0f, 0.0f, 0.0f );
+	SetRenderTargetAndViewPort( pBloom[0], nBloomWidth, nBloomHeight );
+	DrawCryostasisPostPass( pRenderContext, pInverseMaterial, nBloomWidth, nBloomHeight, pSource );
+
+	for ( int i = 0; i < ARRAYSIZE( pBloom ); ++i )
+	{
+		const int nActiveWidth = Cryostasis::LevelSize( nBloomWidth, i );
+		const int nActiveHeight = Cryostasis::LevelSize( nBloomHeight, i );
+		const float flBlurScale = (float)( 1 << i );
+		float region[4];
+		Cryostasis::BloomRegion( nBloomWidth, nBloomHeight, i ? i - 1 : 0, region );
+
+		ITexture *pHorizontalSource = ( i == 0 ) ? pBloom[0] : pBloom[i - 1];
+		SetCryostasisMaterialTexture( pBlurMaterial, pHorizontalSource );
+		SetCryostasisMaterialVec4( pBlurMaterial, "$cryostasisBlurParams", flBlurScale * region[0] / nBloomWidth, 0.0f, region[0], region[1] );
+		SetCryostasisMaterialVec4( pBlurMaterial, "$cryostasisBlurBounds", region[2], region[3], region[0] - region[2], region[1] - region[3] );
+		SetRenderTargetAndViewPort( pTemp, nBloomWidth, nBloomHeight );
+		DrawCryostasisPostPass( pRenderContext, pBlurMaterial, nBloomWidth, nBloomHeight, pHorizontalSource );
+
+		SetCryostasisMaterialTexture( pBlurMaterial, pTemp );
+		SetCryostasisMaterialVec4( pBlurMaterial, "$cryostasisBlurParams", 0.0f, flBlurScale / nBloomHeight, 1.0f, 1.0f );
+		SetCryostasisMaterialVec4( pBlurMaterial, "$cryostasisBlurBounds", region[2], region[3], 1.0f - region[2], 1.0f - region[3] );
+		// Every tap and the final combine clamp to written texel centers,
+		// so no padded border or stale inactive region is sampled.
+		SetRenderTargetAndViewPort( pBloom[i], nActiveWidth, nActiveHeight );
+		DrawCryostasisPostPass( pRenderContext, pBlurMaterial, nActiveWidth, nActiveHeight, pTemp );
+	}
+
+	pRenderContext->PopRenderTargetAndViewport();
+	return true;
 }
 
 CON_COMMAND( hl2_cryostasis, "Apply the HL2 Cryostasis ReShade post-processing preset. Usage: hl2_cryostasis <0..2|on|off|toggle|reset|status>" )
@@ -1598,7 +1790,7 @@ void CEnginePostMaterialProxy::SetupEnginePostMaterialCryostasis( bool bPerformC
 	// depth = distance / 1000 (default far plane), so rescale between the two.
 	const float flDestAlphaDepthRange = ( g_pMaterialSystemHardwareConfig->GetHDRType() == HDR_TYPE_FLOAT ) ? 8192.0f : 192.0f;
 
-	s_vCryostasisInternal3[0] = 7.806838f;			// MagicHDR exp(BloomBrightness), BloomBrightness = 2.055.
+	s_vCryostasisInternal3[0] = 0.0f;				// Unused (exp(BloomBrightness) is applied by the MagicHDR inverse pass).
 	s_vCryostasisInternal3[1] = flDestAlphaDepthRange / 1000.0f;	// Emphasize depth scale.
 	s_vCryostasisInternal3[2] = 0.0f;				// Unused.
 	s_vCryostasisInternal3[3] = 0.0f;				// Unused.
@@ -2627,12 +2819,13 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 			// bloom, software-AA and colour-correction (applied in 1 pass, after generation of the bloom texture)
 			bool  bPerformSoftwareAA	= IsX360() && ( engine->GetDXSupportLevel() >= 90 ) && ( flAAStrength != 0.0f );
 			bool  bPerformBloom			= !bPostVGui && ( flBloomScale > 0.0f ) && ( engine->GetDXSupportLevel() >= 90 );
-			bool  bPerformCryostasis	= !bPostVGui && s_bCryostasisPostProcessActive && ( engine->GetDXSupportLevel() >= 90 );
-			bool  bPerformColCorrect	= !bPostVGui && 
+			bool  bPerformCryostasis	= !bPostVGui && s_bCryostasisPostProcessActive && CanRunCryostasisPostProcess() && s_bCryostasisDepthValid;
+			bool  bNativeColCorrect		= !bPostVGui &&
 										  ( g_pMaterialSystemHardwareConfig->GetDXSupportLevel() >= 90) &&
 										  ( g_pMaterialSystemHardwareConfig->GetHDRType() != HDR_TYPE_FLOAT ) &&
 										  g_pColorCorrectionMgr->HasNonZeroColorCorrectionWeights() &&
 										  mat_colorcorrection.GetInt();
+			bool  bPerformColCorrect	= bNativeColCorrect && !bPerformCryostasis;
 			bool  bSplitScreenHDR		= mat_show_ab_hdr.GetInt();
 			if ( bPerformCryostasis )
 			{
@@ -2666,10 +2859,22 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 					Generate8BitBloomTexture( pRenderContext, flBloomScale, x, y, w, h );
 				}
 
-				// NOTE: no depth re-copy here for Cryostasis. The engine
-				// already snapshots depth right after opaques render - the
-				// only point where destination alpha is coherent; re-copying
-				// at post time would capture translucency blending garbage.
+				if ( bPerformCryostasis )
+				{
+					bPerformCryostasis = GenerateCryostasisMagicHDRBloomTextures( pRenderContext );
+					if ( !bPerformCryostasis && bNativeColCorrect )
+					{
+						// Bloom chain unavailable this frame; fall back to the
+						// vanilla path and restore native color correction.
+						bPerformColCorrect = true;
+						pRenderContext->EnableColorCorrection( true );
+					}
+					// NOTE: no depth re-copy here. The engine already
+					// snapshots depth right after opaques render - the only
+					// point where destination alpha is coherent; re-copying
+					// at post time would capture translucency blending
+					// garbage.
+				}
 
 				// Now add bloom (dest_rt0) to the framebuffer and perform software anti-aliasing and
 				// colour correction, all in one pass (improves performance, reduces quantization errors)

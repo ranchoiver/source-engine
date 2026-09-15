@@ -75,6 +75,9 @@ constant_color_ps2x.fxc
 
 copy_fp_rt_ps2x.fxc
 
+cryostasis_magichdr_blur_ps2x.fxc
+cryostasis_magichdr_inverse_ps2x.fxc
+
 color_projection_ps2x.fxc
 color_projection_vs20.fxc
 

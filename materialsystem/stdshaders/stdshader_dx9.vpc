@@ -80,6 +80,8 @@ $Project "stdshader_dx9"
 		$File	"compositor.cpp"
 		$File	"core_dx9.cpp"
 		$File	"color_projection.cpp"
+		$File	"Cryostasis_MagicHDR_Blur_dx9.cpp"
+		$File	"Cryostasis_MagicHDR_Inverse_dx9.cpp"
 		$File	"debugmrttexture.cpp"
 		$File	"debugmorphaccumulator_dx9.cpp"					[$WIN32]
 		$File	"DebugTextureView.cpp"
