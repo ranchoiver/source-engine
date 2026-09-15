@@ -5,6 +5,7 @@ on:
       - 'engine/audio/snd_dev_mac_audiounit.cpp'
       - 'engine/audio/snd_win.cpp'
       - 'scripts/test-audiounit.py'
+      - 'scripts/benchmark-audiounit.py'
       - 'scripts/tests/audiounit/**'
       - 'scripts/tests/audioqueue/**'
       - '.github/workflows/audiounit-regression.yml'
@@ -13,6 +14,7 @@ on:
       - 'engine/audio/snd_dev_mac_audiounit.cpp'
       - 'engine/audio/snd_win.cpp'
       - 'scripts/test-audiounit.py'
+      - 'scripts/benchmark-audiounit.py'
       - 'scripts/tests/audiounit/**'
       - 'scripts/tests/audioqueue/**'
       - '.github/workflows/audiounit-regression.yml'
@@ -40,3 +42,7 @@ jobs:
       - name: Compile with real Apple SDK for Apple Silicon and Intel
         if: runner.os == 'macOS'
         run: python3 scripts/test-audiounit.py --native-syntax
+      - name: Informational transport comparison against reviewed baseline
+        run: |
+          git fetch --no-tags --depth=1 origin 84a5813182c10d7333bd029bdb531bb349fc8dd5
+          python3 scripts/benchmark-audiounit.py --repetitions 7

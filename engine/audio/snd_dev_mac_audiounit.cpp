@@ -100,11 +100,16 @@ private:
 	// The mixer owns m_sndBuffers. The callback reads only this SPSC FIFO.
 	// Cursors count PCM frames, independently of Source's rebased timeline.
 	void			*m_outputBuffers;
-	std::atomic<unsigned> m_renderedFrames;
 	std::atomic<unsigned> m_writtenFrames;
+	// Separate producer/consumer writes even when the engine's C++11
+	// allocator does not support over-aligned new. Padding rather than an
+	// over-aligned class preserves its ordinary allocation contract.
+	char m_producerPadding[128];
+	std::atomic<unsigned> m_renderedFrames;
 	std::atomic<unsigned> m_underrunCount;
 	std::atomic<unsigned> m_callbackCount;
 	std::atomic<int> m_renderError;
+	char m_consumerPadding[128];
 	unsigned m_lastCallbackCount;
 	double m_lastCallbackTime;
 	void *m_callbackBuffer;
@@ -711,7 +716,10 @@ OSStatus CAudioDeviceMacAudioUnit::RenderAudio( AudioUnitRenderActionFlags *ioAc
 {
 	if ( inNumberFrames == 0 )
 		return noErr;
-	m_callbackCount.fetch_add( 1, std::memory_order_relaxed );
+	// Only this callback writes these counters while the unit is running.
+	// Plain atomic load/store avoids an unnecessary read-modify-write (and
+	// LL/SC retry loop on CPUs without a native atomic-add instruction).
+	m_callbackCount.store( m_callbackCount.load( std::memory_order_relaxed ) + 1, std::memory_order_relaxed );
 
 	// A null data pointer asks the input callback to supply its own storage.
 	// This buffer is allocated once, before starting the unit.
@@ -744,7 +752,7 @@ OSStatus CAudioDeviceMacAudioUnit::RenderAudio( AudioUnitRenderActionFlags *ioAc
 	if ( copied < inNumberFrames )
 	{
 		Q_memset( pOutput + copied * 2, 0, ( inNumberFrames - copied ) * 4 );
-		m_underrunCount.fetch_add( 1, std::memory_order_relaxed );
+		m_underrunCount.store( m_underrunCount.load( std::memory_order_relaxed ) + 1, std::memory_order_relaxed );
 	}
 	pBuffer->mDataByteSize = inNumberFrames * 4;
 	if ( ioActionFlags )
@@ -758,7 +766,8 @@ OSStatus CAudioDeviceMacAudioUnit::RenderAudio( AudioUnitRenderActionFlags *ioAc
 	// Publish only after the copy, so the mixer cannot reuse unread slots.
 	// Silence does not consume PCM or move Source's clock. In particular, a
 	// long mixer stall cannot lap the ring or require a backward clock reset.
-	m_renderedFrames.store( read + copied, std::memory_order_release );
+	if ( copied )
+		m_renderedFrames.store( read + copied, std::memory_order_release );
 	return noErr;
 }
 

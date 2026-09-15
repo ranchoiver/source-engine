@@ -123,3 +123,17 @@ boundary, respectively.
   callback checks, and a targeted Linux/macOS workflow with real Apple SDK
   syntax checks for arm64 and x86_64. Native game/listening validation remains
   necessary; mock-platform timing is not measured device latency.
+
+## 2026-09-15 measured AudioUnit transport optimizations
+
+- Keep the bulk SPSC ring and its existing ownership/lifecycle rules.
+- Separate producer, callback, and game-thread writes with padding; remove
+  unnecessary single-writer atomic RMW operations and unchanged empty-callback
+  cursor stores. Keep fetch-add for multi-writer route notifications.
+- Trialled direct FIFO conversion; despite passing behavioral checks it gave
+  mixed host timings and worse large-slice callback timings, so it was removed.
+- Add paired baseline/candidate microbenchmarks with raw results and explicit
+  limits. Improve the fake mixer boundary so sample values come from the input
+  paintbuffer independently of output ring positions. Keep real-device
+  profiling as the prerequisite for adaptive latency policy or more complex
+  data structures.

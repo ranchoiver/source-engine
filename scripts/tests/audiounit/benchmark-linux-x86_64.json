@@ -1,0 +1,493 @@
+{
+  "platform": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0",
+  "baseline_ref": "84a5813182c10d7333bd029bdb531bb349fc8dd5",
+  "repetitions": 7,
+  "summary": [
+    {
+      "frames": 32,
+      "baseline_pair_mean_ns": 130.099,
+      "candidate_pair_mean_ns": 120.872,
+      "baseline_callback_median_ns": 37,
+      "candidate_callback_median_ns": 34,
+      "baseline_callback_p99_ns": 43,
+      "candidate_callback_p99_ns": 37
+    },
+    {
+      "frames": 128,
+      "baseline_pair_mean_ns": 301.092,
+      "candidate_pair_mean_ns": 287.009,
+      "baseline_callback_median_ns": 39,
+      "candidate_callback_median_ns": 37,
+      "baseline_callback_p99_ns": 48,
+      "candidate_callback_p99_ns": 45
+    },
+    {
+      "frames": 512,
+      "baseline_pair_mean_ns": 827.756,
+      "candidate_pair_mean_ns": 776.38,
+      "baseline_callback_median_ns": 62,
+      "candidate_callback_median_ns": 52,
+      "baseline_callback_p99_ns": 79,
+      "candidate_callback_p99_ns": 67
+    },
+    {
+      "frames": 4096,
+      "baseline_pair_mean_ns": 6851.89,
+      "candidate_pair_mean_ns": 5953.33,
+      "baseline_callback_median_ns": 335,
+      "candidate_callback_median_ns": 326,
+      "baseline_callback_p99_ns": 369,
+      "candidate_callback_p99_ns": 356
+    }
+  ],
+  "runs": {
+    "baseline": [
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 37,
+          "callback_p99_ns": 41,
+          "pair_mean_ns": 119.922,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 38,
+          "callback_p99_ns": 52,
+          "pair_mean_ns": 334.193,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 62,
+          "callback_p99_ns": 99,
+          "pair_mean_ns": 1103.5,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 332,
+          "callback_p99_ns": 369,
+          "pair_mean_ns": 7989.82,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 37,
+          "callback_p99_ns": 41,
+          "pair_mean_ns": 130.099,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 39,
+          "callback_p99_ns": 43,
+          "pair_mean_ns": 279.555,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 62,
+          "callback_p99_ns": 78,
+          "pair_mean_ns": 764.026,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 338,
+          "callback_p99_ns": 378,
+          "pair_mean_ns": 6933.55,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 37,
+          "callback_p99_ns": 41,
+          "pair_mean_ns": 126.556,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 39,
+          "callback_p99_ns": 48,
+          "pair_mean_ns": 294.161,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 61,
+          "callback_p99_ns": 78,
+          "pair_mean_ns": 766.497,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 335,
+          "callback_p99_ns": 360,
+          "pair_mean_ns": 6851.89,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 38,
+          "callback_p99_ns": 56,
+          "pair_mean_ns": 145.714,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 37,
+          "callback_p99_ns": 46,
+          "pair_mean_ns": 280.402,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 62,
+          "callback_p99_ns": 83,
+          "pair_mean_ns": 969.9,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 325,
+          "callback_p99_ns": 363,
+          "pair_mean_ns": 6549.98,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 38,
+          "callback_p99_ns": 43,
+          "pair_mean_ns": 143.767,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 39,
+          "callback_p99_ns": 50,
+          "pair_mean_ns": 341.091,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 61,
+          "callback_p99_ns": 79,
+          "pair_mean_ns": 827.756,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 335,
+          "callback_p99_ns": 380,
+          "pair_mean_ns": 6660.67,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 37,
+          "callback_p99_ns": 47,
+          "pair_mean_ns": 171.964,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 39,
+          "callback_p99_ns": 51,
+          "pair_mean_ns": 427.248,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 62,
+          "callback_p99_ns": 79,
+          "pair_mean_ns": 806.593,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 343,
+          "callback_p99_ns": 382,
+          "pair_mean_ns": 7053.83,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 37,
+          "callback_p99_ns": 45,
+          "pair_mean_ns": 125.475,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 39,
+          "callback_p99_ns": 47,
+          "pair_mean_ns": 301.092,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 62,
+          "callback_p99_ns": 79,
+          "pair_mean_ns": 843.324,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 338,
+          "callback_p99_ns": 367,
+          "pair_mean_ns": 6532.14,
+          "checksum": 0
+        }
+      ]
+    ],
+    "candidate": [
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 34,
+          "callback_p99_ns": 37,
+          "pair_mean_ns": 120.872,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 36,
+          "callback_p99_ns": 40,
+          "pair_mean_ns": 244.483,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 50,
+          "callback_p99_ns": 61,
+          "pair_mean_ns": 704.678,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 313,
+          "callback_p99_ns": 353,
+          "pair_mean_ns": 6257.03,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 34,
+          "callback_p99_ns": 39,
+          "pair_mean_ns": 116.953,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 37,
+          "callback_p99_ns": 41,
+          "pair_mean_ns": 260.916,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 53,
+          "callback_p99_ns": 74,
+          "pair_mean_ns": 837.206,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 327,
+          "callback_p99_ns": 358,
+          "pair_mean_ns": 6571.14,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 33,
+          "callback_p99_ns": 48,
+          "pair_mean_ns": 362.772,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 37,
+          "callback_p99_ns": 53,
+          "pair_mean_ns": 592.081,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 50,
+          "callback_p99_ns": 66,
+          "pair_mean_ns": 926.827,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 319,
+          "callback_p99_ns": 349,
+          "pair_mean_ns": 5761.66,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 34,
+          "callback_p99_ns": 47,
+          "pair_mean_ns": 145.058,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 38,
+          "callback_p99_ns": 58,
+          "pair_mean_ns": 324.168,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 52,
+          "callback_p99_ns": 64,
+          "pair_mean_ns": 776.38,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 307,
+          "callback_p99_ns": 349,
+          "pair_mean_ns": 7597.1,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 34,
+          "callback_p99_ns": 37,
+          "pair_mean_ns": 119.815,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 37,
+          "callback_p99_ns": 47,
+          "pair_mean_ns": 314.301,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 52,
+          "callback_p99_ns": 67,
+          "pair_mean_ns": 706.43,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 326,
+          "callback_p99_ns": 356,
+          "pair_mean_ns": 5922.55,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 34,
+          "callback_p99_ns": 37,
+          "pair_mean_ns": 122.47,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 37,
+          "callback_p99_ns": 45,
+          "pair_mean_ns": 287.009,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 53,
+          "callback_p99_ns": 70,
+          "pair_mean_ns": 803.127,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 326,
+          "callback_p99_ns": 359,
+          "pair_mean_ns": 5835.5,
+          "checksum": 0
+        }
+      ],
+      [
+        {
+          "frames": 32,
+          "callback_median_ns": 35,
+          "callback_p99_ns": 37,
+          "pair_mean_ns": 118.9,
+          "checksum": 992000
+        },
+        {
+          "frames": 128,
+          "callback_median_ns": 37,
+          "callback_p99_ns": 40,
+          "pair_mean_ns": 256.491,
+          "checksum": 4492288
+        },
+        {
+          "frames": 512,
+          "callback_median_ns": 52,
+          "callback_p99_ns": 68,
+          "pair_mean_ns": 725.504,
+          "checksum": 0
+        },
+        {
+          "frames": 4096,
+          "callback_median_ns": 374,
+          "callback_p99_ns": 407,
+          "pair_mean_ns": 5953.33,
+          "checksum": 0
+        }
+      ]
+    ]
+  },
+  "concurrent_runs_mframes_per_second": {
+    "baseline": [
+      207.574,
+      277.972,
+      206.721,
+      178.162,
+      219.198,
+      292.229,
+      347.413
+    ],
+    "candidate": [
+      397.304,
+      343.464,
+      348.702,
+      231.481,
+      197.849,
+      407.066,
+      356.407
+    ]
+  },
+  "limits": "Fake mixer/platform, no scheduling cadence, no CPU affinity; clock-call overhead included. These are host microbenchmarks, not game FPS, audible latency or macOS performance.",
+  "candidate_source_sha256": "01600ee1b07d0b2a2c2a540d62321d150d85d7cfadfa03a424c5aca38a64f3bc",
+  "harness_sha256": "2da0c90fd7c4da938eb48e1d1eb8a6be34e6a4fec4c227fdb025d7aba8de51c3"
+}

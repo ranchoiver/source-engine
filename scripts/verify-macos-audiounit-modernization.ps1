@@ -44,7 +44,7 @@ Assert-TextMatch $audioUnit 'kAudioHardwarePropertyPowerHint' 'Backend should op
 Assert-TextMatch $audioUnit 'kAudioHardwarePowerHintNone' 'Backend should prefer low-latency CoreAudio power policy.'
 Assert-TextMatch $audioUnit 'AudioObjectSetPropertyData\(\s*kAudioObjectSystemObject' 'Power hint must be applied through CoreAudio system object properties.'
 Assert-TextMatch $audioUnit 'RecoverAudioUnit\(\s*"CoreAudio device change"' 'Device changes must recover on the game thread.'
-Assert-TextMatch $audioUnit 'm_underrunCount\.fetch_add' 'Underruns must be counted.'
+Assert-TextMatch $audioUnit 'm_underrunCount\.store' 'Underruns must be counted.'
 Assert-TextMatch $audioUnit 'SilenceOutput' 'Underruns and unsupported callback layouts must emit silence.'
 Assert-TextMatch $audioUnit 'S_TransferStereo16\(\s*m_sndBuffers' 'Backend must preserve Source mixer ring semantics.'
 Assert-TextMatch $audioUnit 'GetOutputPosition[\s\S]*m_renderedFrames' 'Playback clock must use frames rendered by the AudioUnit callback.'

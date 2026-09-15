@@ -45,10 +45,15 @@ bool MIX_ScaleChannelVolume(paintbuffer_t*,channel_t*,int*,int) { return false; 
 void S_SpatializeChannel(int*,int,const Vector*,float,float) {}
 void OnSndSurroundCvarChanged2(IConVar*,const char*,float) {}
 void OnSndSurroundLegacyChanged2(IConVar*,const char*,float) {}
-void S_TransferStereo16(void* out,const portable_samplepair_t*,int begin,int end) {
+void S_TransferStereo16(void* out,const portable_samplepair_t* input,int begin,int end) {
     nonRealtime();
-    if (recording) return; // Real S_TransferStereo16 records but leaves PCM untouched.
-    for (int n=begin;n<end;++n) static_cast<uint32*>(out)[n & 32767]=uint32(n)+1;
+    if (recording) return; // Real transfer records but leaves device PCM untouched.
+    // Samples come from the paintbuffer, independently of their destination
+    // ring index. This models the real transfer's input/output contract.
+    for (int n=0;n<end-begin;++n) {
+        uint32 pcm=uint16_t(input[n].left) | (uint32(uint16_t(input[n].right))<<16);
+        static_cast<uint32*>(out)[(begin+n) & 32767]=pcm;
+    }
 }
 
 struct FakeUnit { bool running; AURenderCallbackStruct callback; UInt32 maxFrames; };
@@ -125,7 +130,16 @@ struct Device : CAudioDeviceMacAudioUnit {
     Device() { require(Init(),"Init failed"); }
     ~Device() { Shutdown(); }
 };
-static void paint(Device& d,int count) { d.TransferSamples(g_paintedtime+count); g_paintedtime+=count; }
+static void paint(Device& d,int count) {
+    while (count>0) {
+        int chunk=std::min(count,4096);
+        for (int n=0;n<chunk;++n) {
+            uint32 pcm=uint32(g_paintedtime)+n+1;
+            testPaint[n].left=pcm & 65535; testPaint[n].right=pcm>>16;
+        }
+        d.TransferSamples(g_paintedtime+chunk); g_paintedtime+=chunk; count-=chunk;
+    }
+}
 static OSStatus render(Device& d,AudioBufferList& buffer,UInt32 frames,AudioUnitRenderActionFlags& flags) {
     inCallback=true; callbackCopies=0;
     OSStatus status=d.RenderAudio(&flags,frames,&buffer);
@@ -334,15 +348,36 @@ static void run(const std::string& name) {
         paint(d,32768); tagged(pull(d,16384),0,16384);
         require(current->maxFrames>=hardwareFrames,"max slice below hardware size");
     } else if (name=="spsc-stress") stress(d);
-    else if (name=="benchmark") {
-        uint32 pcm[512]; const int iterations=20000;
+    else if (name=="benchmark-concurrent") {
         auto begin=std::chrono::steady_clock::now();
-        for (int n=0;n<iterations;++n) {
-            paint(d,512); AudioBufferList b={1,{{2,sizeof(pcm),pcm}}}; AudioUnitRenderActionFlags flags=0;
-            render(d,b,512,flags);
+        stress(d);
+        double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
+        std::cout<<"{\"million_frames_per_second\":"<<4.0/seconds<<"}\n";
+    }
+    else if (name=="benchmark") {
+        for (unsigned frames : {32u,128u,512u,4096u}) {
+            std::vector<uint32> pcm(frames);
+            std::vector<double> times;
+            const int iterations=30000;
+            times.reserve(iterations);
+            uint32 checksum=0;
+            auto begin=std::chrono::steady_clock::now();
+            for (int n=0;n<iterations+1000;++n) {
+                paint(d,frames);
+                AudioBufferList b={1,{{2,frames*4,pcm.data()}}}; AudioUnitRenderActionFlags flags=0;
+                auto before=std::chrono::steady_clock::now();
+                render(d,b,frames,flags);
+                auto after=std::chrono::steady_clock::now();
+                if (n>=1000) times.push_back(std::chrono::duration<double,std::nano>(after-before).count());
+                else if (n==999) begin=after;
+                checksum^=pcm.back();
+            }
+            double total=std::chrono::duration<double,std::nano>(std::chrono::steady_clock::now()-begin).count()/iterations;
+            std::sort(times.begin(),times.end());
+            std::cout<<"{\"frames\":"<<frames<<",\"callback_median_ns\":"<<times[iterations/2]
+                     <<",\"callback_p99_ns\":"<<times[iterations*99/100]
+                     <<",\"pair_mean_ns\":"<<total<<",\"checksum\":"<<checksum<<"}\n";
         }
-        double us=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-begin).count()/iterations;
-        std::cout<<"512-frame producer + callback mean: "<<us<<" us (informational host benchmark)\n";
     } else throw std::runtime_error("unknown test");
 }
 int main(int argc,char** argv) {
