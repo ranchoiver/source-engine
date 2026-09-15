@@ -162,8 +162,8 @@ int main(){
                 // Check the final shader's region mapping, including edge/out-of-range UVs.
                 float region[4];Cryostasis::BloomRegion(w,h,i,region);
                 for(float u:std::vector<float>{-.02f,0,.25f,.5f,1,1.02f}){
-                    float2 uv=clamp(float2(u,u)*float2(region[0],region[1]),{region[2],region[3]},{region[0]-region[2],region[1]-region[3]});
-                    require(std::abs(sample(&actual,uv.x,uv.y)-sample(&prev,u,u))<.0008f,"final bloom region mismatch");
+                    float4 r(region[0],region[1],region[2],region[3]);
+                    require(std::abs(CryostasisSampleBloom(&actual,{u,u},r).x-sample(&prev,u,u))<.0008f,"final bloom region mismatch");
                 }
             }
             ++cases;

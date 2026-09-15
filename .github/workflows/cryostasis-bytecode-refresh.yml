@@ -1,0 +1,29 @@
+name: Cryostasis bytecode refresh
+on:
+  push:
+    branches: [codex/hl2-cryostasis-full-parity]
+    paths: [.github/workflows/cryostasis-bytecode-refresh.yml]
+permissions:
+  contents: read
+jobs:
+  regenerate:
+    if: github.repository == 'ranchoiver/source-engine'
+    runs-on: windows-2022
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Regenerate and publish the three reviewed shader files
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & scripts/build-cryostasis-vcs.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Shader generation failed' }
+          git add -- game/hl2/shaders/fxc/engine_post_ps20b.vcs game/hl2/shaders/fxc/cryostasis_magichdr_inverse_ps20b.vcs game/hl2/shaders/fxc/cryostasis_magichdr_blur_ps20b.vcs
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Regenerate reviewed Cryostasis shader bytecode'
+          if ($LASTEXITCODE -ne 0) { throw 'Shader commit failed' }
+          git push origin HEAD:refs/heads/codex/hl2-cryostasis-full-parity
+          if ($LASTEXITCODE -ne 0) { throw 'Shader push failed; branch may have advanced' }

@@ -28,6 +28,12 @@ def main():
     for swizzle in ('xy', 'zw'):
         shader = shader.replace('.' + swizzle, '.' + swizzle + '()')
     shader = shader.replace('float4 main(', 'float4 BlurShader(')
+    combine = (source / 'materialsystem/stdshaders/Engine_Post_ps2x.fxc').read_text()
+    combine = combine[combine.index('float3 CryostasisSampleBloom'):combine.index('float3 CryostasisMagicHDR(')]
+    combine = combine.replace('float3', 'float4').replace('.rgb', '')
+    for swizzle in ('xy', 'zw'):
+        combine = combine.replace('.' + swizzle, '.' + swizzle + '()')
+    shader += '\n' + combine
     fixture = (ROOT / 'scripts/tests/cryostasis/renderer.cpp').read_text()
     fixture = fixture.replace('// INSERT_SHADER', shader).replace('// INSERT_PRODUCTION', functions)
     with tempfile.TemporaryDirectory(prefix='cryostasis-test-') as directory:
